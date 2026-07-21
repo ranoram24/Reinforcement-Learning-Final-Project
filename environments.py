@@ -59,7 +59,7 @@ class GridWorld:
     NAME = "GridWorld"
 
     def __init__(self, size=10, start=(0, 0), goal=(9, 9),
-                 walls=(), slippery=(), traps=()):
+                 walls=(), slippery=(), traps=(), seed=None):
         self.size = size
         self.start = start
         self.goal = goal
@@ -69,7 +69,11 @@ class GridWorld:
         self.terminals = {goal} | self.traps
         self.actions = GRID_ACTIONS
         self.n_actions = 4
+        self.rng = np.random.default_rng(seed)     # slips are reproducible
         self._state = start
+
+    def reseed(self, seed):
+        self.rng = np.random.default_rng(seed)
 
     # ---- geometry -------------------------------------------------------- #
     def in_bounds(self, c):
@@ -122,7 +126,7 @@ class GridWorld:
     def step(self, a):
         outs = self.outcomes(self._state, a)
         probs = [p for p, _ in outs]
-        s2 = outs[int(np.random.choice(len(outs), p=probs))][1]
+        s2 = outs[int(self.rng.choice(len(outs), p=probs))][1]
         r, done = self.reward_done(s2)
         self._state = s2
         return s2, r, done
@@ -163,15 +167,22 @@ class GridWorld:
 # Room 1 — The Frozen Archive (Ice Age) — Dynamic Programming
 # --------------------------------------------------------------------------- #
 class Room1FrozenArchive(GridWorld):
+    """LEVEL 1 (easiest): cross a frozen lake. No deadly traps — just a big patch
+    of slippery ice in the middle and a couple of ice-boulders. The agent may go
+    the safe way around or risk the slippery short-cut; DP weighs the stochastic
+    slips exactly."""
+
     NAME = "Room 1 · The Frozen Archive"
     MOVIE = "Ice Age (2002)"
     ALGO = "Value Iteration (Dynamic Programming)"
 
-    def __init__(self):
+    def __init__(self, seed=None):
         super().__init__(
-            size=10, start=(0, 0), goal=(9, 9),
-            walls=[(2, 2), (2, 3), (2, 4), (5, 7), (6, 7), (7, 7)],
-            slippery=[(1, 1), (1, 2), (3, 5), (4, 5), (8, 8)],  # (9,9) is NOT slippery
+            size=10, start=(0, 0), goal=(9, 9), seed=seed,
+            # ice-boulders block a few cells; a 3x3+ frozen lake sits mid-board
+            walls=[(6, 2), (2, 6), (7, 6)],
+            slippery=[(3, 3), (4, 3), (5, 3), (3, 4), (4, 4), (5, 4),
+                      (3, 5), (4, 5), (5, 5), (6, 5)],   # (9,9) is NOT slippery
             traps=[],
         )
 
@@ -180,16 +191,21 @@ class Room1FrozenArchive(GridWorld):
 # Room 2 — The Dark Temple (Indiana Jones) — SARSA
 # --------------------------------------------------------------------------- #
 class Room2DarkTemple(GridWorld):
+    """LEVEL 2 (moderate): a booby-trapped temple. A gauntlet of spike pits
+    (instant death) with slippery mud beside them, plus stone walls shaping the
+    corridors. SARSA must learn a *safe* path that keeps clear of the mud-next-to-
+    pit cells."""
+
     NAME = "Room 2 · The Dark Temple"
     MOVIE = "Raiders of the Lost Ark (1981)"
     ALGO = "SARSA (on-policy TD control)"
 
-    def __init__(self):
+    def __init__(self, seed=None):
         super().__init__(
-            size=10, start=(0, 0), goal=(9, 9),
-            walls=[],
-            slippery=[(2, 3), (3, 2), (4, 5), (5, 4)],       # mud (not absorbing)
-            traps=[(3, 3), (4, 4), (5, 5), (8, 2)],          # spike pits (absorbing)
+            size=10, start=(0, 0), goal=(9, 9), seed=seed,
+            walls=[(1, 7), (7, 3), (5, 8), (8, 5)],          # temple stones
+            slippery=[(2, 3), (4, 5), (5, 5), (3, 6), (6, 6)],   # mud beside pits
+            traps=[(2, 2), (5, 2), (3, 5), (6, 4), (4, 7), (7, 7)],  # spike pits
         )
 
 
@@ -201,9 +217,11 @@ class Room3CloningLab(GridWorld):
     MOVIE = "The Matrix (1999)"
     ALGO = "Q-Learning (off-policy TD control)"
 
-    def __init__(self):
-        super().__init__(size=10, start=(0, 0), goal=(9, 0),
-                         walls=[], slippery=[], traps=[])
+    def __init__(self, seed=None):
+        # "Firewall" pillars force the safe route up and over, sharpening the
+        # risk/reward of hugging the cliff of clones along the bottom.
+        super().__init__(size=10, start=(0, 0), goal=(9, 0), seed=seed,
+                         walls=[(3, 2), (6, 2)], slippery=[], traps=[])
         # Cliff = bottom row between start and goal.  Canonical Cliff-Walking:
         # stepping on it costs -100 and RESETS to start (episode continues).
         self.cliff = {(x, 0) for x in range(1, 9)}           # x = 1..8

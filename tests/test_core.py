@@ -30,7 +30,8 @@ def test_slip_distribution_sums_to_one():
 
 def test_slippery_tiles_are_stochastic_others_not():
     env = E.Room1FrozenArchive()
-    assert len(env.outcomes((1, 1), E.UP)) > 1          # ice → several outcomes
+    ice = next(iter(env.slippery))
+    assert len(env.outcomes(ice, E.UP)) > 1             # ice → several outcomes
     assert len(env.outcomes((0, 0), E.UP)) == 1         # normal → deterministic
 
 
@@ -47,9 +48,10 @@ def test_terminals_absorbing_and_rewarded():
 
 
 def test_wall_blocks_movement():
-    env = E.Room1FrozenArchive()               # wall at (2,2); from (1,2) go RIGHT
-    outs = dict((s2, p) for p, s2 in env.outcomes((1, 2), E.RIGHT))
-    assert (2, 2) not in outs                   # cannot enter the wall
+    env = E.Room1FrozenArchive()
+    wx, wy = next(iter(env.walls))              # step towards a wall from its left
+    outs = dict((s2, p) for p, s2 in env.outcomes((wx - 1, wy), E.RIGHT))
+    assert (wx, wy) not in outs                 # cannot enter the wall
 
 
 # --------------------------------------------------------------------------- #
@@ -68,10 +70,13 @@ def test_value_iteration_converges_and_solves():
 # Room 2 / Room 3 — TD control
 # --------------------------------------------------------------------------- #
 def test_sarsa_learns_to_escape():
-    env = E.Room2DarkTemple()
-    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_decay=0.999,
+    env = E.Room2DarkTemple(seed=0)
+    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_decay=0.995,
                   episodes=1500, max_steps=300, seed=0).train(snapshots=3)
-    assert A.rollout(env, res["final_policy"], max_steps=200)["success"]
+    # robust to slip stochasticity: the learned policy escapes the large majority of runs
+    ev = E.Room2DarkTemple(seed=1)
+    wins = sum(A.rollout(ev, res["final_policy"], max_steps=200)["success"] for _ in range(20))
+    assert wins >= 18
 
 
 def test_cliff_resets_not_terminal_and_qlearning_hugs_cliff():

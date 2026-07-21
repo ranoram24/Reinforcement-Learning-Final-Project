@@ -67,25 +67,31 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 * **Actions** Up / Down / Left / Right.
 * **Model** *known* → Value Iteration:
   `V(s) ← maxₐ Σₛ′ P(s′|s,a)·[R + γ·V(s′)]`, repeated until `max|ΔV| < θ`.
-* **Layout** walls `(2,2),(2,3),(2,4),(5,7),(6,7),(7,7)`; ice `(1,1),(1,2),(3,5),(4,5),(8,8)`.
+* **Layout (Level 1 — easiest)** a **frozen lake** of slippery ice fills the middle
+  (`x∈3..6, y∈3..5`) with three ice-boulder walls `(6,2),(2,6),(7,6)`. No deadly traps — the
+  agent may go the safe way around or risk the slippery short-cut; DP weighs the slips exactly.
 * **Rewards** step `−1`, reaching `(9,9)` `+100` (terminal).
 * **Chart** max `|ΔV|` per sweep (convergence) + a heat-map of the learned `V(s)`.
-* **Good hyperparameters** `γ = 0.99`, `θ = 1e-4` → converges in **~22 sweeps**.
+* **Good hyperparameters** `γ = 0.99`, `θ = 1e-4` → converges in **~25 sweeps**.
 
 ### Room 2 · The Dark Temple — SARSA
 * **State / actions** same grid; start `(0,0)`, exit `(9,9)`. Model *unknown* (learned by
   interaction). Update: `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]` (**on-policy**).
-* **Layout** spike-pit traps `(3,3),(4,4),(5,5),(8,2)` (terminal, `−100`, **not** slippery);
-  mud `(2,3),(3,2),(4,5),(5,4)` (slippery).
+* **Layout (Level 2 — moderate)** a booby-trapped temple: a gauntlet of spike-pit traps
+  `(2,2),(5,2),(3,5),(6,4),(4,7),(7,7)` (terminal, `−100`, **not** slippery), slippery mud
+  `(2,3),(4,5),(5,5),(3,6),(6,6)` beside the pits, and stone walls `(1,7),(7,3),(5,8),(8,5)`.
+  SARSA must learn a *safe* route that keeps clear of the mud-next-to-pit cells.
 * **Rewards** step `−1`, pit `−100`, exit `+100`.
 * **Charts** ε-decay and cumulative reward per episode.
 * **Good hyperparameters** `α = 0.1`, `γ = 0.99`, `ε₀ = 1.0`, `ε-decay = 0.995`, `ε_min = 0.01`,
-  `episodes = 1500`, `max_steps = 400`.
+  `episodes = 1500`, `max_steps = 400` → ~100 % escape rate.
 
 ### Room 3 · The Cloning Lab — Q-Learning (Cliff Walking)
 * **State / actions** grid; start `(0,0)`, exit `(9,0)`; deterministic movement. Update uses the
   **greedy** bootstrap `Q(s,a) ← Q(s,a) + α·[r + γ·maxₐ′Q(s′,a′) − Q(s,a)]` (**off-policy**).
-* **Layout** the bottom row `y=0`, `x = 1..8`, is the *cliff of clones*.
+* **Layout (Level 3 — hard)** the bottom row `y=0`, `x = 1..8`, is the *cliff of clones*;
+  two "firewall" pillars `(3,2),(6,2)` force the safe route up and over, sharpening the
+  risk/reward of hugging the cliff.
 * **Rewards** step `−1`, cliff `−100` **and reset to start** (episode continues — canonical Cliff
   Walking), exit `+100` (terminal).
 * **Charts** reward per episode + a plot of the greedy path (the **aggressive cliff-hugging route**
@@ -153,14 +159,11 @@ deliberate; each keeps the pedagogical goal intact.
    *acceleration* actions with accumulating velocity — we follow the MD (richer, momentum-based).
 5. **Room 5 has no fixed exit;** it is a survival task. Surviving to the step cap counts as
    “escaped”.
-
----
-
-## Notes for the Zoom defense (key ideas to be able to explain)
-* **DP vs. TD** — Room 1 needs the model (`P`, `R`); Rooms 2–5 learn from samples.
-* **On-policy (SARSA) vs. off-policy (Q-Learning)** — the bootstrap target (`Q(s′,a′)` vs.
-  `maxₐ′Q(s′,a′)`) and why Q-learning learns the risky-but-optimal cliff path.
-* **Function approximation & tile coding** — why a table can’t represent a continuous state, and
-  how overlapping tilings give generalisation; the `α / n_tilings` step size.
-* **Potential-based shaping** — why it preserves the optimal policy.
-* **Partial observability** — Room 5’s sensor and why limited vision makes the task a POMDP.
+6. **Levels were redesigned as a difficulty ramp.** Rather than the brief's scattered
+   coordinates, each grid is an intentional, movie-themed level whose hazards escalate
+   (Room 1: ice only → Room 2: pits + mud → Room 3: cliff of clones). Each cell shows its
+   reward so the learned policy is interpretable, and a legend explains every tile.
+7. **Reproducible & robust evaluation.** Every environment uses a **seeded RNG**, so training
+   and replay are reproducible. Because slippery rooms are stochastic, the replay reports a
+   **success rate over many runs** (not one lucky/unlucky episode) and plays a representative
+   run — so “more episodes” never *looks* worse due to a single random slip.
