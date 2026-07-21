@@ -166,47 +166,397 @@ class GridWorld:
 # --------------------------------------------------------------------------- #
 # Room 1 — The Frozen Archive (Ice Age) — Dynamic Programming
 # --------------------------------------------------------------------------- #
-class Room1FrozenArchive(GridWorld):
-    """LEVEL 1 (easiest): cross a frozen lake. No deadly traps — just a big patch
-    of slippery ice in the middle and a couple of ice-boulders. The agent may go
-    the safe way around or risk the slippery short-cut; DP weighs the stochastic
-    slips exactly."""
+class Room1FrozenArchive:
+    """LEVEL 1 — Ice Age key-and-door puzzle.
+
+    Hezki must collect the KEY, which melts the ice-gate (door), then reach the
+    EXIT.  Optional bonus tiles are one-off pickups; a hazard tile costs points
+    but is not terminal.
+
+    Because pickups are one-off, the state is AUGMENTED with a bitmask of what
+    has been collected:  state = (x, y, mask).  Step reward is 0 (a gentle first
+    room) — discounting (γ<1) is what still rewards a short route.
+
+    Slip model (per-tile AND per-action): a tile may say "DOWN -> 60% down /
+    40% right".  That slip only applies when the agent chooses THAT action; any
+    other action on the same tile is deterministic.
+    """
 
     NAME = "Room 1 · The Frozen Archive"
     MOVIE = "Ice Age (2002)"
     ALGO = "Value Iteration (Dynamic Programming)"
+    SIZE = 10
+    STEP_REWARD = 0.0
+    EXIT_REWARD = 100.0
+
+    # ---- Layout, written TOP row first (row 0 = top), 10x10 ---------------- #
+    #   '.' blank   '#' wall   'S' start   'E' exit(+100, terminal)
+    #   'D' door (acts as a wall until the key is held, then vanishes)
+    #   'K' key     'a''b''c' bonus pickups   'x' hazard   '~' slippery
+    LAYOUT = [
+        "...~~....S",
+        ".##..####.",
+        ".##..#K##.",
+        "~....a~...",
+        ".#########",
+        ".....~..~~",
+        ".~~##b##~c",
+        "#..##.##~~",
+        "D~...~.#..",
+        "E#......x.",
+    ]
+    PICKUPS = {"K": 50.0, "a": 15.0, "b": 5.0, "c": 20.0}
+    HAZARD = -50.0
+
+    # Slip rules keyed by (col, row-from-top) -> {action: [(prob, direction)]}
+    SLIP = {
+        (3, 0): {DOWN:  [(0.60, DOWN),  (0.40, LEFT)]},
+        (4, 0): {DOWN:  [(0.50, DOWN),  (0.50, RIGHT)]},
+        (0, 3): {DOWN:  [(0.70, DOWN),  (0.30, RIGHT)]},
+        (6, 3): {UP:    [(0.60, UP),    (0.40, RIGHT)]},   # the only way to the key
+        (5, 5): {DOWN:  [(0.40, DOWN),  (0.60, RIGHT)]},
+        (8, 5): {DOWN:  [(0.40, DOWN),  (0.60, LEFT)]},
+        (9, 5): {DOWN:  [(0.40, DOWN),  (0.60, LEFT)]},
+        (1, 6): {DOWN:  [(0.60, DOWN),  (0.40, RIGHT)]},
+        (2, 6): {DOWN:  [(0.60, DOWN),  (0.40, UP)]},
+        (8, 6): {RIGHT: [(0.30, RIGHT), (0.70, DOWN)]},
+        (8, 7): {RIGHT: [(0.30, RIGHT), (0.70, DOWN)]},
+        (9, 7): {DOWN:  [(0.40, DOWN),  (0.60, LEFT)]},
+        (1, 8): {LEFT:  [(0.60, LEFT),  (0.40, UP)]},      # the only way to the gate
+        (5, 8): {UP:    [(0.60, UP),    (0.40, RIGHT)]},
+    }
 
     def __init__(self, seed=None):
-        super().__init__(
-            size=10, start=(0, 0), goal=(9, 9), seed=seed,
-            # ice-boulders block a few cells; a 3x3+ frozen lake sits mid-board
-            walls=[(6, 2), (2, 6), (7, 6)],
-            slippery=[(3, 3), (4, 3), (5, 3), (3, 4), (4, 4), (5, 4),
-                      (3, 5), (4, 5), (5, 5), (6, 5)],   # (9,9) is NOT slippery
-            traps=[],
-        )
+        self.size = self.SIZE
+        self.actions = GRID_ACTIONS
+        self.n_actions = 4
+        self.rng = np.random.default_rng(seed)
+
+        self.walls, self.doors, self.slippery = set(), set(), {}
+        self.pickup_at, self.hazards = {}, set()
+        self.start = self.exit = None
+        ice_tiles = set()
+        for row, line in enumerate(self.LAYOUT):
+            y = self.SIZE - 1 - row                       # flip: row 0 is the TOP
+            for x, ch in enumerate(line):
+                cell = (x, y)
+                if ch == "#":   self.walls.add(cell)
+                elif ch == "D": self.doors.add(cell)
+                elif ch == "S": self.start = cell
+                elif ch == "E": self.exit = cell
+                elif ch == "x": self.hazards.add(cell)
+                elif ch == "~": ice_tiles.add(cell)
+                elif ch in self.PICKUPS: self.pickup_at[cell] = ch
+        for (cx, cr), rules in self.SLIP.items():
+            self.slippery[(cx, self.SIZE - 1 - cr)] = rules
+
+        # the drawn ice ('~') and the slip rules must describe the same tiles
+        if ice_tiles != set(self.slippery):
+            raise ValueError(
+                "Room 1 layout/SLIP mismatch — "
+                f"in LAYOUT only: {sorted(ice_tiles - set(self.slippery))}; "
+                f"in SLIP only: {sorted(set(self.slippery) - ice_tiles)}")
+
+        # stable bit order for the collected-mask
+        self.pickup_order = sorted(self.pickup_at)          # list of cells
+        self.bit = {c: i for i, c in enumerate(self.pickup_order)}
+        self.n_pickups = len(self.pickup_order)
+        self.key_cell = next((c for c, ch in self.pickup_at.items() if ch == "K"), None)
+        self.key_bit = self.bit[self.key_cell] if self.key_cell else None
+        self.reset()
+
+    # ---- helpers ---------------------------------------------------------- #
+    def has_key(self, mask):
+        return self.key_bit is None or bool((mask >> self.key_bit) & 1)
+
+    def in_bounds(self, c):
+        return 0 <= c[0] < self.SIZE and 0 <= c[1] < self.SIZE
+
+    def blocked(self, cell, mask):
+        """Walls always block; a door blocks only while the key is missing."""
+        return (cell in self.walls) or (cell in self.doors and not self.has_key(mask))
+
+    def is_terminal(self, s):
+        return (s[0], s[1]) == self.exit
+
+    def reseed(self, seed):
+        self.rng = np.random.default_rng(seed)
+
+    def _move(self, s, direction):
+        x, y, mask = s
+        nxt = (x + _DELTA[direction][0], y + _DELTA[direction][1])
+        if not self.in_bounds(nxt) or self.blocked(nxt, mask):
+            return (x, y)
+        return nxt
+
+    def outcomes(self, s, a):
+        """[(prob, cell)] — slip applies only to the action the tile names."""
+        rules = self.slippery.get((s[0], s[1]), {})
+        cands = rules.get(a, [(1.0, a)])
+        dist = {}
+        for p, direction in cands:
+            c = self._move(s, direction)
+            dist[c] = dist.get(c, 0.0) + p
+        return [(p, c) for c, p in dist.items()]
+
+    def _enter(self, cell, mask):
+        """(reward, new_mask, done) for stepping onto `cell` holding `mask`."""
+        r, done = self.STEP_REWARD, False
+        if cell in self.pickup_at:
+            i = self.bit[cell]
+            if not (mask >> i) & 1:                        # one-off pickup
+                r += self.PICKUPS[self.pickup_at[cell]]
+                mask |= (1 << i)
+        if cell in self.hazards:
+            r += self.HAZARD
+        if cell == self.exit:
+            r += self.EXIT_REWARD
+            done = True
+        return r, mask, done
+
+    def transitions(self, s, a):
+        out = []
+        for p, cell in self.outcomes(s, a):
+            r, m2, done = self._enter(cell, s[2])
+            out.append((p, (cell[0], cell[1], m2), r, done))
+        return out
+
+    # ---- DP interface ----------------------------------------------------- #
+    def states(self):
+        return [(x, y, m)
+                for x in range(self.SIZE) for y in range(self.SIZE)
+                if (x, y) not in self.walls
+                for m in range(1 << self.n_pickups)]
+
+    def build_model(self):
+        return {s: {a: self.transitions(s, a) for a in self.actions}
+                for s in self.states() if not self.is_terminal(s)}
+
+    # ---- model-free interface --------------------------------------------- #
+    def reset(self):
+        self._state = (self.start[0], self.start[1], 0)
+        return self._state
+
+    def step(self, a):
+        outs = self.outcomes(self._state, a)
+        probs = [p for p, _ in outs]
+        cell = outs[int(self.rng.choice(len(outs), p=probs))][1]
+        r, m2, done = self._enter(cell, self._state[2])
+        self._state = (cell[0], cell[1], m2)
+        return self._state, r, done
+
+    def is_success(self):
+        return (self._state[0], self._state[1]) == self.exit
+
+    def encode(self, s):
+        return s
+
+    def render_frame(self):
+        return {"agent": (self._state[0], self._state[1]), "mask": self._state[2]}
+
+    def render_meta(self):
+        return dict(kind="keydoor", size=self.SIZE, start=self.start, goal=self.exit,
+                    walls=self.walls, doors=self.doors, slippery=self.slippery,
+                    pickups=self.pickup_at, pickup_rewards=self.PICKUPS,
+                    bit=self.bit, hazards=self.hazards, hazard_reward=self.HAZARD,
+                    exit_reward=self.EXIT_REWARD, traps=set(), cliff=set())
 
 
 # --------------------------------------------------------------------------- #
 # Room 2 — The Dark Temple (Indiana Jones) — SARSA
 # --------------------------------------------------------------------------- #
-class Room2DarkTemple(GridWorld):
-    """LEVEL 2 (moderate): a booby-trapped temple. A gauntlet of spike pits
-    (instant death) with slippery mud beside them, plus stone walls shaping the
-    corridors. SARSA must learn a *safe* path that keeps clear of the mud-next-to-
-    pit cells."""
+class Room2DarkTemple:
+    """LEVEL 2 — Raiders temple: golden idol (key) → stone door → exit.
+
+    Mechanics
+    ---------
+    * step reward 0; idol +1000; treasure +100 (one-off); exit +2000 (terminal).
+    * **Spike pits** cost −50/−100 and throw the agent back to the start, but do
+      NOT end the episode.
+    * The **stone door** blocks the exit until the idol is taken, then vanishes.
+    * A **pressure plate** appears once the idol is held.  Standing on it wakes
+      the **boulder**, which then *retraces the agent's own trail* a few steps
+      behind — so it only catches you if you double back.  Being caught costs
+      −1500, throws you to the start and RESETS the temple to its default layout
+      (idol and treasure respawn, door returns, boulder gone).
+    * The plate is a pure trap: the exit is already opened by the idol alone.
+
+    State = (x, y, collected-mask, chaser-position or None).
+    """
 
     NAME = "Room 2 · The Dark Temple"
     MOVIE = "Raiders of the Lost Ark (1981)"
     ALGO = "SARSA (on-policy TD control)"
+    SIZE = 10
+    STEP_REWARD = 0.0
+    EXIT_REWARD = 2000.0
+    CATCH_REWARD = -1500.0
+
+    # row 0 = top.  '.' blank  '#' wall  '~' slippery  'S' start  'E' exit
+    # 'D' door  'K' idol/key  'G' treasure  'h' pit −50  'H' pit −100
+    # 'B' pressure plate (only exists once the idol is held)
+    LAYOUT = [
+        "K.B.#..GGG",
+        "~.#.#.#GGG",
+        "h.#.#H#HH~",
+        ".~#.#.#...",
+        ".h#.#.#.HH",
+        "~.#.#.#...",
+        "h.#.#.###.",
+        "..#..~....",
+        ".######.#.",
+        "S#ED....#.",
+    ]
+    PICKUPS = {"K": 1000.0, "G": 100.0}
+    HOLE_REWARD = {"h": -50.0, "H": -100.0}
+    SLIP = {
+        (0, 1): {UP:    [(0.50, UP),    (0.50, DOWN)]},
+        (9, 2): {UP:    [(0.60, UP),    (0.40, LEFT)]},
+        (1, 3): {UP:    [(0.60, UP),    (0.40, DOWN)]},
+        (0, 5): {UP:    [(0.70, UP),    (0.30, DOWN)]},
+        (5, 7): {RIGHT: [(0.80, RIGHT), (0.20, UP)]},
+    }
 
     def __init__(self, seed=None):
-        super().__init__(
-            size=10, start=(0, 0), goal=(9, 9), seed=seed,
-            walls=[(1, 7), (7, 3), (5, 8), (8, 5)],          # temple stones
-            slippery=[(2, 3), (4, 5), (5, 5), (3, 6), (6, 6)],   # mud beside pits
-            traps=[(2, 2), (5, 2), (3, 5), (6, 4), (4, 7), (7, 7)],  # spike pits
-        )
+        self.size = self.SIZE
+        self.actions = GRID_ACTIONS
+        self.n_actions = 4
+        self.rng = np.random.default_rng(seed)
+
+        self.walls, self.doors, self.slippery = set(), set(), {}
+        self.pickup_at, self.holes = {}, {}
+        self.start = self.exit = self.button = None
+        ice_tiles = set()
+        for row, line in enumerate(self.LAYOUT):
+            y = self.SIZE - 1 - row                       # flip: row 0 is the TOP
+            for x, ch in enumerate(line):
+                c = (x, y)
+                if ch == "#":   self.walls.add(c)
+                elif ch == "D": self.doors.add(c)
+                elif ch == "S": self.start = c
+                elif ch == "E": self.exit = c
+                elif ch == "B": self.button = c
+                elif ch == "~": ice_tiles.add(c)
+                elif ch in self.HOLE_REWARD: self.holes[c] = self.HOLE_REWARD[ch]
+                elif ch in self.PICKUPS: self.pickup_at[c] = ch
+        for (cx, cr), rules in self.SLIP.items():
+            self.slippery[(cx, self.SIZE - 1 - cr)] = rules
+        if ice_tiles != set(self.slippery):
+            raise ValueError(
+                "Room 2 layout/SLIP mismatch — "
+                f"in LAYOUT only: {sorted(ice_tiles - set(self.slippery))}; "
+                f"in SLIP only: {sorted(set(self.slippery) - ice_tiles)}")
+
+        self.pickup_order = sorted(self.pickup_at)
+        self.bit = {c: i for i, c in enumerate(self.pickup_order)}
+        self.n_pickups = len(self.pickup_order)
+        self.key_cell = next(c for c, ch in self.pickup_at.items() if ch == "K")
+        self.key_bit = self.bit[self.key_cell]
+        self.chaser_spawn = self.key_cell            # boulder wakes where the idol was
+        self.reset()
+
+    # ---- helpers ---------------------------------------------------------- #
+    def has_key(self, mask):
+        return bool((mask >> self.key_bit) & 1)
+
+    def in_bounds(self, c):
+        return 0 <= c[0] < self.SIZE and 0 <= c[1] < self.SIZE
+
+    def blocked(self, cell, mask):
+        return (cell in self.walls) or (cell in self.doors and not self.has_key(mask))
+
+    def is_terminal(self, s):
+        return (s[0], s[1]) == self.exit
+
+    def reseed(self, seed):
+        self.rng = np.random.default_rng(seed)
+
+    def _move(self, s, direction):
+        x, y, mask = s[0], s[1], s[2]
+        nxt = (x + _DELTA[direction][0], y + _DELTA[direction][1])
+        if not self.in_bounds(nxt) or self.blocked(nxt, mask):
+            return (x, y)
+        return nxt
+
+    def outcomes(self, s, a):
+        """[(prob, cell)] — slip applies only to the action the tile names."""
+        cands = self.slippery.get((s[0], s[1]), {}).get(a, [(1.0, a)])
+        dist = {}
+        for p, direction in cands:
+            c = self._move(s, direction)
+            dist[c] = dist.get(c, 0.0) + p
+        return [(p, c) for c, p in dist.items()]
+
+    # ---- model-free interface --------------------------------------------- #
+    def reset(self):
+        self._path = [self.start]        # every cell the agent has stood on
+        self._chaser_i = None            # boulder's index into that path
+        self._state = (self.start[0], self.start[1], 0, None)
+        return self._state
+
+    def step(self, a):
+        x, y, mask, chaser = self._state
+        outs = self.outcomes(self._state, a)
+        cell = outs[int(self.rng.choice(len(outs), p=[p for p, _ in outs]))][1]
+        r, done = self.STEP_REWARD, False
+
+        if cell in self.pickup_at:                          # idol / treasure
+            i = self.bit[cell]
+            if not (mask >> i) & 1:
+                r += self.PICKUPS[self.pickup_at[cell]]
+                mask |= 1 << i
+
+        if cell in self.holes:                               # pit: penalty + restart
+            r += self.holes[cell]
+            cell = self.start
+
+        if cell == self.exit:
+            r += self.EXIT_REWARD
+            done = True
+
+        self._path.append(cell)                              # record where we now stand
+
+        prev_chaser = chaser
+        if cell == self.button and self.has_key(mask) and self._chaser_i is None:
+            # Plate pressed: the boulder appears AT ONCE where the idol lay, and
+            # from here on retraces the agent's own route one cell per step.
+            self._chaser_i = max((i for i, c in enumerate(self._path)
+                                  if c == self.chaser_spawn), default=0)
+            chaser = self._path[self._chaser_i]
+        elif self._chaser_i is not None:
+            self._chaser_i = min(self._chaser_i + 1, len(self._path) - 1)
+            chaser = self._path[self._chaser_i]
+
+        if chaser is not None and not done and (cell == chaser or cell == prev_chaser):
+            r += self.CATCH_REWARD                           # caught → temple resets
+            cell, mask, chaser = self.start, 0, None
+            self._chaser_i, self._path = None, [self.start]
+
+        self._state = (cell[0], cell[1], mask, chaser)
+        return self._state, r, done
+
+    def encode(self, s):
+        """Learning state: absolute cell + collected mask + *relative* boulder."""
+        x, y, mask, ch = s
+        if ch is None:
+            return (x, y, mask, None)
+        return (x, y, mask, (max(-3, min(3, ch[0] - x)), max(-3, min(3, ch[1] - y))))
+
+    def is_success(self):
+        return (self._state[0], self._state[1]) == self.exit
+
+    def render_frame(self):
+        return {"agent": (self._state[0], self._state[1]),
+                "mask": self._state[2], "chaser": self._state[3]}
+
+    def render_meta(self):
+        return dict(kind="keydoor", size=self.SIZE, start=self.start, goal=self.exit,
+                    walls=self.walls, doors=self.doors, slippery=self.slippery,
+                    pickups=self.pickup_at, pickup_rewards=self.PICKUPS,
+                    bit=self.bit, hazards=dict(self.holes),
+                    hazard_resets=True, button=self.button,
+                    catch_reward=self.CATCH_REWARD,
+                    exit_reward=self.EXIT_REWARD, traps=set(), cliff=set())
 
 
 # --------------------------------------------------------------------------- #

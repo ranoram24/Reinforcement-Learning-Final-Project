@@ -35,6 +35,14 @@ def _milestones(episodes, k):
     return {int(p) for p in np.linspace(0, episodes - 1, k).astype(int)}
 
 
+def _record_points(episodes, k):
+    """Episode indices whose full trajectory we keep for the replay browser."""
+    if episodes <= 0 or k <= 0:
+        return set()
+    k = min(k, episodes)
+    return {int(p) for p in np.linspace(0, episodes - 1, k).astype(int)}
+
+
 # --------------------------------------------------------------------------- #
 # Policy objects (used for evaluation / replay)
 # --------------------------------------------------------------------------- #
@@ -119,7 +127,7 @@ class ValueIteration:
 class TDAgent:
     def __init__(self, env, alpha=0.1, gamma=0.99, epsilon=1.0,
                  epsilon_decay=0.995, epsilon_min=0.01, episodes=2000,
-                 max_steps=300, seed=None):
+                 max_steps=300, optimistic_init=0.0, seed=None):
         self.env = env
         self.alpha = float(alpha)
         self.gamma = float(gamma)
@@ -131,7 +139,11 @@ class TDAgent:
         self.n_actions = env.n_actions
         self.encode = getattr(env, "encode", lambda s: s)
         self.rng = np.random.default_rng(seed)
-        self.Q = defaultdict(lambda: np.zeros(self.n_actions))
+        # Optimistic initialisation: unseen state-actions look attractive, which
+        # drives *systematic* exploration — essential in corridor mazes where
+        # ε-greedy random walks almost never reach a distant reward.
+        self.q0 = float(optimistic_init)
+        self.Q = defaultdict(lambda: np.full(self.n_actions, self.q0))
 
     def _act(self, s, eps):
         if self.rng.random() < eps:
@@ -146,16 +158,22 @@ class TDAgent:
 class Sarsa(TDAgent):
     """On-policy TD(0): update towards the action actually taken next."""
 
-    def train(self, snapshots=6, progress=None):
-        rewards, eps_hist, lengths, snaps = [], [], [], []
+    def train(self, snapshots=6, progress=None, record=40):
+        rewards, eps_hist, lengths, snaps, tapes = [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
+        rec_at = _record_points(self.episodes, record)
         eps = self.eps0
         for ep in range(self.episodes):
             s = self.encode(self.env.reset())
             a = self._act(s, eps)
+            taping = ep in rec_at
+            frames = [self.env.render_frame()] if taping else None
+            acts, rews = ([], []) if taping else (None, None)
             done, total, steps = False, 0.0, 0
             while not done and steps < self.max_steps:
                 s2, r, done = self.env.step(a)
+                if taping:
+                    frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
                 s2 = self.encode(s2)
                 a2 = self._act(s2, eps)
                 target = r + (0.0 if done else self.gamma * self.Q[s2][a2])
@@ -165,6 +183,10 @@ class Sarsa(TDAgent):
                 steps += 1
             eps = max(self.eps_min, eps * self.eps_decay)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
+            if taping:
+                tapes.append(dict(episode=ep, reward=total, steps=steps,
+                                  success=self.env.is_success(), frames=frames,
+                                  actions=acts, step_rewards=rews))
             if ep in milestones:
                 snaps.append((ep, self._snapshot()))
             if progress:
@@ -172,22 +194,28 @@ class Sarsa(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final)
+                    snapshots=snaps, final_policy=final, tapes=tapes)
 
 
 class QLearning(TDAgent):
     """Off-policy TD(0): update towards the greedy next action (max)."""
 
-    def train(self, snapshots=6, progress=None):
-        rewards, eps_hist, lengths, snaps = [], [], [], []
+    def train(self, snapshots=6, progress=None, record=40):
+        rewards, eps_hist, lengths, snaps, tapes = [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
+        rec_at = _record_points(self.episodes, record)
         eps = self.eps0
         for ep in range(self.episodes):
             s = self.encode(self.env.reset())
+            taping = ep in rec_at
+            frames = [self.env.render_frame()] if taping else None
+            acts, rews = ([], []) if taping else (None, None)
             done, total, steps = False, 0.0, 0
             while not done and steps < self.max_steps:
                 a = self._act(s, eps)
                 s2, r, done = self.env.step(a)
+                if taping:
+                    frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
                 s2 = self.encode(s2)
                 target = r + (0.0 if done else self.gamma * self.Q[s2].max())
                 self.Q[s][a] += self.alpha * (target - self.Q[s][a])
@@ -196,6 +224,10 @@ class QLearning(TDAgent):
                 steps += 1
             eps = max(self.eps_min, eps * self.eps_decay)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
+            if taping:
+                tapes.append(dict(episode=ep, reward=total, steps=steps,
+                                  success=self.env.is_success(), frames=frames,
+                                  actions=acts, step_rewards=rews))
             if ep in milestones:
                 snaps.append((ep, self._snapshot()))
             if progress:
@@ -203,7 +235,7 @@ class QLearning(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final)
+                    snapshots=snaps, final_policy=final, tapes=tapes)
 
 
 # --------------------------------------------------------------------------- #
@@ -263,12 +295,16 @@ class LinearFAAgent:
     def _q(self, feats):
         return self.w[:, feats].sum(axis=1)
 
-    def train(self, snapshots=6, progress=None):
-        rewards, lengths, snaps = [], [], []
+    def train(self, snapshots=6, progress=None, record=25):
+        rewards, lengths, snaps, tapes = [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
+        rec_at = _record_points(self.episodes, record)
         eps = self.eps0
         for ep in range(self.episodes):
             feats = self.coder.features(self.env.reset())
+            taping = ep in rec_at
+            frames = [self.env.render_frame()] if taping else None
+            acts, rews = ([], []) if taping else (None, None)
             done, total, steps = False, 0.0, 0
             while not done and steps < self.max_steps:
                 if self.rng.random() < eps:
@@ -276,6 +312,8 @@ class LinearFAAgent:
                 else:
                     a = _argmax_random(self._q(feats), self.rng)
                 s2, r, done = self.env.step(a)
+                if taping:
+                    frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
                 feats2 = self.coder.features(s2)
                 q_sa = self.w[a, feats].sum()
                 target = r + (0.0 if done else self.gamma * self._q(feats2).max())
@@ -285,6 +323,10 @@ class LinearFAAgent:
                 steps += 1
             eps = max(self.eps_min, eps * self.eps_decay)
             rewards.append(total); lengths.append(steps)
+            if taping:
+                tapes.append(dict(episode=ep, reward=total, steps=steps,
+                                  success=self.env.is_success(), frames=frames,
+                                  actions=acts, step_rewards=rews))
             if ep in milestones:
                 snaps.append((ep, FAPolicy(self.w.copy(), self.coder)))
             if progress:
@@ -292,7 +334,7 @@ class LinearFAAgent:
         final = FAPolicy(self.w.copy(), self.coder)
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, lengths=lengths, epsilons=None,
-                    snapshots=snaps, final_policy=final)
+                    snapshots=snaps, final_policy=final, tapes=tapes)
 
 
 # --------------------------------------------------------------------------- #

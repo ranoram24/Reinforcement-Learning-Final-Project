@@ -57,34 +57,83 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 > bottom. **Terminal states are absorbing** everywhere (the episode ends on entry — no further
 > sliding), the single exception being the Room-3 cliff (see below).
 >
-> **Slip model (Rooms 1–2):** from a slippery tile an action lands on the *intended* cell with
-> prob **0.70**, on the cell **90° left** with **0.10**, **90° right** with **0.10**, and
-> **backwards** with **0.10**. Any outcome that would hit a wall or the boundary keeps the
-> agent in place.
+> **Slip model (Rooms 1–2) — per-tile AND per-action.** Each slippery tile names *one*
+> action and how it may go wrong, e.g. `DOWN → 60% down / 40% right`. That slip applies
+> **only** when the agent chooses that action; **every other action on the same tile is
+> deterministic (100%)**. Any outcome that would hit a wall or the boundary keeps the agent
+> in place. Hover a slippery tile in the app to read its exact probabilities.
 
 ### Room 1 · The Frozen Archive — Value Iteration (DP)
-* **State space** `S = {(x,y) : 0 ≤ x,y ≤ 9}`, minus wall cells. Start `(0,0)`, exit `(9,9)`.
+A **key-and-door puzzle**: Hezki must grab the key (which melts the ice-gate), then reach the exit.
+
+* **State space** is **augmented with the pickups already collected**:
+  `s = (x, y, mask)` where `mask` is a 4-bit set of {key, +15, +5, +20}. 1152 states.
+  The augmentation is what stops the agent farming the same bonus forever.
 * **Actions** Up / Down / Left / Right.
 * **Model** *known* → Value Iteration:
   `V(s) ← maxₐ Σₛ′ P(s′|s,a)·[R + γ·V(s′)]`, repeated until `max|ΔV| < θ`.
-* **Layout (Level 1 — easiest)** a **frozen lake** of slippery ice fills the middle
-  (`x∈3..6, y∈3..5`) with three ice-boulder walls `(6,2),(2,6),(7,6)`. No deadly traps — the
-  agent may go the safe way around or risk the slippery short-cut; DP weighs the slips exactly.
-* **Rewards** step `−1`, reaching `(9,9)` `+100` (terminal).
-* **Chart** max `|ΔV|` per sweep (convergence) + a heat-map of the learned `V(s)`.
-* **Good hyperparameters** `γ = 0.99`, `θ = 1e-4` → converges in **~25 sweeps**.
+* **Layout (Level 1)** — text map, row 0 = top (`.` blank, `#` wall, `~` slippery,
+  `S` start, `E` exit, `D` door, `K` key, `a/b/c` bonuses, `x` hazard):
+
+```
+. . . ~ ~ . . . . S        row 4 is wall except column 1 — the ONLY passage
+. # # . . # # # # .        between the top and bottom halves.
+. # # . . # K # # .        The key is walled in on 3 sides: reachable only by
+~ . . . . a ~ . . .        slipping UP from the tile below it (60% success).
+. # # # # # # # # #        The gate is likewise reachable only by slipping
+. . . . . ~ . . ~ ~        LEFT from its neighbour (60% success).
+. ~ ~ # # b # # ~ c
+# . . # # . # # ~ ~
+D ~ . . . ~ . # . .
+E # . . . . . . x .
+```
+
+* **Rewards** step **`0`** (a gentle first room — discounting still favours a short route),
+  key `+50`, bonuses `+15 / +5 / +20` (one-off), hazard `−50` (repeatable, non-terminal),
+  exit `+100` (terminal). The **door acts as a wall until the key is held**, then vanishes.
+* **Slip model (per-tile AND per-action)** — a tile names one action, e.g.
+  `DOWN → 60% down / 40% right`. That slip applies **only** when the agent chooses that
+  action; every other action on the same tile is deterministic (100%).
+* **Chart** max `|ΔV|` per sweep (convergence) + a heat-map of `V(s)` (sliced at `mask=0`).
+* **Good hyperparameters** `γ = 0.99`, `θ = 1e-4` → converges in **~63 sweeps**;
+  the optimal plan scores **190** (50+15+5+20+100) in ~50 steps, **30/30 successful runs**.
 
 ### Room 2 · The Dark Temple — SARSA
-* **State / actions** same grid; start `(0,0)`, exit `(9,9)`. Model *unknown* (learned by
-  interaction). Update: `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]` (**on-policy**).
-* **Layout (Level 2 — moderate)** a booby-trapped temple: a gauntlet of spike-pit traps
-  `(2,2),(5,2),(3,5),(6,4),(4,7),(7,7)` (terminal, `−100`, **not** slippery), slippery mud
-  `(2,3),(4,5),(5,5),(3,6),(6,6)` beside the pits, and stone walls `(1,7),(7,3),(5,8),(8,5)`.
-  SARSA must learn a *safe* route that keeps clear of the mud-next-to-pit cells.
-* **Rewards** step `−1`, pit `−100`, exit `+100`.
+A **Raiders-style idol run**: take the golden idol (key) to open the stone gate, then reach the
+exit — without doubling back once the boulder is awake.
+
+* **State** augmented like Room 1, plus the boulder: `s = (x, y, mask, boulder-offset)`.
+  `mask` covers the idol + 6 treasures (one-off); the boulder enters the state as a *relative*
+  offset (clipped to ±3), which keeps the table small. Model *unknown* — learned by interaction:
+  `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]` (**on-policy**).
+* **Layout (Level 2)** — row 0 = top (`h`/`H` = pit −50/−100, `B` = pressure plate,
+  `K` = idol, `G` = treasure):
+
+```
+K . B . # . . G G G      Column 3 is solid wall except the plate (top) and the exit
+~ . # . # . # G G G      (bottom) — so the plate is the ONLY way out of the left
+h . # . # H # H H ~      corridor. The left corridor is a zig-zag in which every
+. ~ # . # . # . . .      straight-ahead continuation is a pit.
+. h # . # . # . H H
+~ . # . # . # . . .
+h . # . # . # # # .
+. . # . . ~ . . . .
+. # # # # # # . # .
+S # E D . . . . # .
+```
+
+* **Rewards** step **`0`**, idol `+1000`, treasure `+100` (one-off), pit `−50 / −100`
+  **and hurled back to the start** (episode continues), boulder catch `−1500` + back to start
+  + **the temple resets to its default layout**, exit `+2000` (terminal).
+* **Slip model** per-tile *and* per-action, exactly as in Room 1.
+* **Why optimistic initialisation matters here** — the left corridor is a zig-zag guarded by
+  pits, so a plain ε-greedy random walk reached the idol **0 times in 120 000 steps** and SARSA
+  learned nothing (0 % escape). With **optimistic init** (`Q₀ = 500`) exploration becomes
+  *systematic* and the room is solved in ~7 s.
 * **Charts** ε-decay and cumulative reward per episode.
-* **Good hyperparameters** `α = 0.1`, `γ = 0.99`, `ε₀ = 1.0`, `ε-decay = 0.995`, `ε_min = 0.01`,
-  `episodes = 1500`, `max_steps = 400` → ~100 % escape rate.
+* **Good hyperparameters** `α = 0.1`, `γ = 0.99`, `ε = 0.10`, `ε-decay = 1.0`, **`Q₀ = 500`**,
+  `episodes = 3000`, `max_steps = 400` → **100 % escape**, ~40-51 steps,
+  best recorded episode **3000** (idol + exit, no pit penalties).
 
 ### Room 3 · The Cloning Lab — Q-Learning (Cliff Walking)
 * **State / actions** grid; start `(0,0)`, exit `(9,0)`; deterministic movement. Update uses the

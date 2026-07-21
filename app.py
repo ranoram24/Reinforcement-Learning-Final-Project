@@ -42,8 +42,10 @@ ROOMS = {
                        "so Hezki plans the perfect escape with a full model of the world."),
     "room2": dict(label="Dark Temple", emoji="🏛️", stars=2, kind="grid",
                   movie="Raiders of the Lost Ark (1981)", algo="SARSA (on-policy TD)",
-                  plot="Hezki falls into an ancient alien temple — unknown terrain, "
-                       "slippery mud and deadly spike pits. He must learn by trial."),
+                  plot="Hezki falls into an ancient temple. He must grab the golden idol "
+                       "🏆 to open the stone gate, dodge spike pits that hurl him back to "
+                       "the start — and never touch the pressure plate, which wakes a "
+                       "boulder 🪨 that retraces his own trail."),
     "room3": dict(label="Cloning Lab", emoji="🕶️", stars=3, kind="grid",
                   movie="The Matrix (1999)", algo="Q-Learning (off-policy TD)",
                   plot="Agent J clones himself like Agent Smith. Hezki must take a "
@@ -69,6 +71,20 @@ def store():
     return st.session_state.setdefault("store", {})
 
 
+def eps_note(e0, decay, emin, episodes):
+    """Tell the user when ε actually bottoms out — a 0.9 decay hits the floor in
+    ~30 episodes, which is invisible on a 3000-episode run."""
+    import math
+    if decay >= 1.0:
+        return f"ε stays at **{e0:g}** for all {episodes} episodes (no decay)."
+    if e0 <= emin:
+        return f"ε is already at its minimum ({emin:g})."
+    n = math.ceil(math.log(emin / e0) / math.log(decay))
+    pct = 100 * min(n, episodes) / max(episodes, 1)
+    return (f"ε falls from {e0:g} → {emin:g} after **~{n} episodes** "
+            f"({pct:.0f}% of the {episodes}-episode run).")
+
+
 # --------------------------------------------------------------------------- #
 # Sidebar — room selector + ALL hyperparameters + train/reset
 # --------------------------------------------------------------------------- #
@@ -92,21 +108,34 @@ def sidebar():
         p["theta"] = st.sidebar.number_input("θ  convergence threshold", 1e-6, 1e-1,
                                              1e-4, format="%.6f", key="t1")
     elif key in ("room2", "room3"):
+        r2 = (key == "room2")
+        # Room 2 is a zig-zag corridor maze: ε-greedy random walks never reach the
+        # idol, so it defaults to low ε + optimistic init (directed exploration).
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key=f"a{key}")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key=f"g{key}")
-        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.0, 1.0, 1.0, 0.01, key=f"e{key}")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.90, 1.0, 0.995, 0.001,
-                                               format="%.3f", key=f"ed{key}")
-        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key=f"em{key}")
-        p["episodes"] = st.sidebar.number_input("episodes", 100, 20000,
-                                               1500 if key == "room2" else 1000, 100, key=f"ep{key}")
+        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.10, 1.0,
+                                         0.10 if r2 else 1.0, 0.01, key=f"e{key}")
+        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0,
+                                               1.0 if r2 else 0.9950, 0.0005,
+                                               format="%.4f", key=f"ed{key}")
+        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.50, 0.01, 0.01, key=f"em{key}")
+        p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 3000.0,
+                                                 500.0 if r2 else 0.0, 50.0, key=f"oi{key}")
+        p["episodes"] = st.sidebar.number_input("episodes", 100, 40000,
+                                                3000 if r2 else 1000, 100, key=f"ep{key}")
         p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000, 400, 1, key=f"ms{key}")
+        st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_decay"],
+                                    p["epsilon_min"], p["episodes"]))
+        if r2:
+            st.sidebar.caption("Step reward is 0 here; the idol (+1000) opens the gate to the "
+                               "exit (+2000). Pressing the plate wakes the boulder instantly; "
+                               "it then retraces your route one step per move. ⏱️ ~7 s to train.")
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
-        p["epsilon"] = st.sidebar.slider("ε  exploration", 0.0, 1.0, 0.10, 0.01, key="e4")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.90, 1.0, 1.0, 0.001,
-                                              format="%.3f", key="ed4")
+        p["epsilon"] = st.sidebar.slider("ε  exploration", 0.10, 1.0, 0.10, 0.01, key="e4")
+        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0, 1.0, 0.0005,
+                                              format="%.4f", key="ed4")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 2000, 100, key="ep4")
         with st.sidebar.expander("Function-approximation & physics"):
             p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 200.0, 100.0, 10.0, key="oi4")
@@ -124,9 +153,9 @@ def sidebar():
         p["spawn_every"] = st.sidebar.slider("drone spawn every N steps", 5, 60, 15, 1, key="sp5")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key="a5")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.95, 0.001, key="g5")
-        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.0, 1.0, 1.0, 0.01, key="e5")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.90, 1.0, 0.999, 0.001,
-                                              format="%.3f", key="ed5")
+        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
+        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0, 0.9990, 0.0005,
+                                              format="%.4f", key="ed5")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key="em5")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 3000, 100, key="ep5")
         with st.sidebar.expander("Physics"):
@@ -134,12 +163,8 @@ def sidebar():
             p["max_steps"] = st.number_input("max steps (survival cap)", 0, 3000, 500, 1, key="ms5")
 
     st.sidebar.divider()
-    c1, c2 = st.sidebar.columns(2)
-    train_clicked = c1.button("🚀 Train", use_container_width=True, type="primary")
-    if c2.button("🗑️ Reset", use_container_width=True):
-        store().pop(key, None)
-        st.session_state.get("evalcache", {}).clear()
-        st.rerun()
+    train_clicked = st.sidebar.button("🚀 Train (resets this room)",
+                                      use_container_width=True, type="primary")
 
     random_clicked = False
     if key == "room5":
@@ -168,6 +193,14 @@ def build_env(key, p, seed=None):
 
 
 def train(key, p):
+    # Training always starts from a clean slate for this room.
+    store().pop(key, None)
+    st.session_state.get("evalcache", {}).clear()
+    st.session_state.get("epcache", {}).clear()
+    st.session_state.pop(f"stage_{key}", None)
+    st.session_state.pop(f"epsel_{key}", None)
+    st.session_state.pop("rand_seed", None)
+
     env = build_env(key, p, seed=0)
     bar = st.progress(0.0, text="Training…")
 
@@ -189,9 +222,11 @@ def train(key, p):
                                     n_tilings=p["n_tilings"], n_bins=p["n_bins"],
                                     max_steps=p["max_steps"], **common)
         elif key == "room2":
-            agent = A.Sarsa(env, max_steps=p["max_steps"], **common)
+            agent = A.Sarsa(env, max_steps=p["max_steps"],
+                            optimistic_init=p.get("optimistic_init", 0.0), **common)
         else:  # room3 & room5 -> Q-Learning
-            agent = A.QLearning(env, max_steps=p["max_steps"], **common)
+            agent = A.QLearning(env, max_steps=p["max_steps"],
+                                optimistic_init=p.get("optimistic_init", 0.0), **common)
         res = agent.train(snapshots=6, progress=cb)
         entry.update(res=res, final_policy=res["final_policy"],
                      policy=getattr(agent, "Q", None) and
@@ -205,10 +240,11 @@ def train(key, p):
 # Rendering helpers
 # --------------------------------------------------------------------------- #
 def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
-               trail=None, fill=False):
+               trail=None, fill=False, mask=0, chaser=None):
     theme = U.ROOM_THEME[key]
     if ROOMS[key]["kind"] in ("dp", "grid"):
-        return U.render_grid_html(meta, theme, agent=agent, policy=policy, fill=fill)
+        return U.render_grid_html(meta, theme, agent=agent, policy=policy,
+                                  fill=fill, mask=mask, chaser=chaser)
     return U.render_space_svg(meta, theme, agent=agent, obstacles=obstacles,
                               vision=vision, trail=trail, fill=fill)
 
@@ -257,8 +293,9 @@ def render_frames(key, entry, roll, cap=320):
     if len(frames) > cap:                                    # keep the last frame
         step = (len(frames) - 1) / (cap - 1)
         frames = [frames[int(round(i * step))] for i in range(cap)]
-    return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"), vision=vision)
-            for f in frames]
+    return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"),
+                       vision=vision, mask=f.get("mask", 0),
+                       chaser=f.get("chaser")) for f in frames]
 
 
 def replay_eval(key, entry, tag, policy):
@@ -320,9 +357,11 @@ def tab_charts(key, entry):
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.convergence_chart(res["deltas"]), use_container_width=True)
         c2.plotly_chart(U.value_heatmap(res["V"], entry["meta"]), use_container_width=True)
+        sx, sy = entry["meta"]["start"]
+        v0 = res["V"].get((sx, sy, 0), res["V"].get((sx, sy)))
         st.success(f"Converged in **{res['iterations']}** sweeps "
-                   f"(θ = {entry['params']['theta']:g}). "
-                   f"V(start) = {res['V'][entry['meta']['start']]:.2f}")
+                   f"(θ = {entry['params']['theta']:g}). V(start) = {v0:.2f}  "
+                   f"— the value of the whole plan: key → gate → exit (plus bonuses).")
     elif key in ("room2", "room3"):
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"]), use_container_width=True)
@@ -343,24 +382,89 @@ def tab_charts(key, entry):
         st.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
 
 
+def episode_list(key, entry):
+    """Recorded episodes for this room, best total reward first."""
+    cache = st.session_state.setdefault("epcache", {})
+    ck = (key, id(entry))
+    if ck in cache:
+        return cache[ck]
+    if ROOMS[key]["kind"] == "dp":
+        # Value Iteration has no training episodes — run the optimal policy a
+        # number of times instead (the ice makes every run different).
+        eps = []
+        for i in range(20):
+            roll = eval_roll(key, entry, entry["final_policy"], seed=100 + i)
+            eps.append(dict(episode=i, reward=roll["reward"], steps=roll["steps"],
+                            success=roll["success"], frames=roll["frames"]))
+    else:
+        eps = list(entry["res"].get("tapes", []))
+    eps.sort(key=lambda e: -e["reward"])
+    cache[ck] = eps
+    return eps
+
+
+def step_notes(entry, ep):
+    """One line per frame: the action taken, what happened, and the reward."""
+    meta = entry["meta"]
+    inv_bit = {i: c for c, i in meta.get("bit", {}).items()}
+    pickups, prew = meta.get("pickups", {}), meta.get("pickup_rewards", {})
+    start = meta.get("start")
+    frames = ep["frames"]
+    acts = ep.get("actions") or []
+    rews = ep.get("step_rewards") or []
+    notes, cum = ["▶ start of episode"], 0.0
+    for i in range(1, len(frames)):
+        prev, cur = frames[i - 1], frames[i]
+        a = acts[i - 1] if i - 1 < len(acts) else None
+        r = float(rews[i - 1]) if i - 1 < len(rews) else 0.0
+        cum += r
+        arrow = E.ACTION_ARROWS.get(a, "") if a is not None else ""
+        name = E.ACTION_NAMES.get(a, "?") if a is not None else "?"
+        ev = []
+        gained = int(cur.get("mask", 0)) & ~int(prev.get("mask", 0))
+        for b in range(gained.bit_length()):
+            if (gained >> b) & 1:
+                ch = pickups.get(inv_bit.get(b))
+                ev.append(f"took the {'key' if ch == 'K' else 'bonus'} "
+                          f"(+{prew.get(ch, 0):g})")
+        if prev.get("chaser") is not None and cur.get("chaser") is None and r < 0:
+            ev.append("caught by the chaser → room reset")
+        elif (start and tuple(cur["agent"]) == tuple(start)
+              and tuple(prev["agent"]) != tuple(start) and r < 0):
+            ev.append("fell into a pit → back to start")
+        if tuple(cur["agent"]) == tuple(prev["agent"]) and not ev:
+            ev.append("blocked — walked into a wall/edge")
+        if i == len(frames) - 1 and ep.get("success"):
+            ev.append("reached the EXIT 🎉")
+        notes.append(f"step {i}  {arrow} {name}  ·  "
+                     f"{', '.join(ev) if ev else 'moved'}  ·  "
+                     f"reward {r:+.0f}  ·  total {cum:+.0f}")
+    return notes
+
+
+def grid_player(key, entry, ep, token):
+    """Exact, step-by-step replay for the grid rooms (no down-sampling)."""
+    theme, meta = U.ROOM_THEME[key], entry["meta"]
+    T = U.THEMES[theme]
+    masks = sorted({f.get("mask", 0) for f in ep["frames"]})
+    boards = {str(m): U.render_grid_html(meta, theme, agent=None, mask=m, ids=True)
+              for m in masks}
+    frames = [{"m": str(f.get("mask", 0)), "a": list(f["agent"]),
+               "c": (list(f["chaser"]) if f.get("chaser") else None)}
+              for f in ep["frames"]]
+    return U.render_player_grid(boards, frames, T["agent"], T.get("chaser", "🪨"),
+                                T["accent"], T["board"], delay_ms=160, token=token,
+                                notes=step_notes(entry, ep))
+
+
 def tab_replay(key, entry, random_clicked):
     if not entry:
-        st.info("Train the room, then replay what Hezki learned at each stage here.")
+        st.info("Train the room, then browse its episodes here.")
         return
     r = ROOMS[key]
-
+    is_grid = r["kind"] in ("dp", "grid")
     embed(legend_html(key, entry["meta"]), height=LEGEND_H)
-    board_h = (GRID_H if r["kind"] in ("dp", "grid") else SPACE_H) + 118
-    delay = 200 if r["kind"] in ("dp", "grid") else 70
-
-    if r["kind"] == "dp":
-        st.caption("Dynamic Programming computes the optimal policy directly — there are no "
-                   "training episodes. Because the ice is slippery, each run can differ:")
-        ev = replay_eval(key, entry, "dp", entry["final_policy"])
-        st.caption(f"Optimal policy · **{ev['rate']*100:.0f}% escape rate** over {ev['n']} runs "
-                   f"· showing a representative run ({ev['steps']} steps).")
-        embed(U.render_player(ev["frames"], delay_ms=delay), height=board_h)
-        return
+    board_h = (GRID_H if is_grid else SPACE_H) + 130
 
     if key == "room5" and random_clicked:
         seed = int(st.session_state.get("rand_seed", 0)) + 1
@@ -368,23 +472,57 @@ def tab_replay(key, entry, random_clicked):
         roll = eval_roll(key, entry, entry["final_policy"], seed=1000 + seed)
         st.caption(f"🎲 Random test room (seed {seed}) · final policy · "
                    f"{'survived ✅' if roll['success'] else 'hit a drone ❌'} — {roll['steps']} steps")
-        embed(U.render_player(render_frames(key, entry, roll), delay_ms=delay), height=board_h)
+        embed(U.render_player(render_frames(key, entry, roll), delay_ms=70), height=board_h)
         return
 
-    snaps = entry["res"]["snapshots"]
-    labels = [f"episode {ep}" if ep < snaps[-1][0] else f"episode {ep} (final)"
-              for ep, _ in snaps]
-    st.caption("Replay the policy **as it was at a given training stage** — watch Hezki improve. "
-               "The escape rate is measured over many runs so a single unlucky slip doesn't mislead.")
-    choice = st.select_slider("Training stage", options=list(range(len(snaps))),
-                              value=len(snaps) - 1, format_func=lambda i: labels[i],
-                              key=f"stage_{key}")
-    _, policy = snaps[choice]
-    ev = replay_eval(key, entry, f"stage{choice}", policy)
-    st.caption(f"Stage **{labels[choice]}** · **{ev['rate']*100:.0f}% escape rate** over {ev['n']} runs"
-               + (f" · avg {ev['avg']:.0f} steps when it wins" if ev["rate"] else "")
-               + " · showing a representative run.")
-    embed(U.render_player(ev["frames"], delay_ms=delay), height=board_h)
+    eps = episode_list(key, entry)
+    if not eps:
+        st.info("No episodes were recorded for this run.")
+        return
+
+    st.caption("Pick an episode to replay — **sorted best total reward first**. "
+               "Every step is shown exactly; if Hezki seems to stand still he tried to "
+               "walk into a wall (the only actions are up / down / left / right).")
+
+    def label(i):
+        e = eps[i]
+        tick = "✅" if e["success"] else "❌"
+        return (f"{tick}  return {e['reward']:>8.0f}   ·   {e['steps']:>4d} steps"
+                f"   ·   episode #{e['episode']}")
+
+    idx = st.selectbox("Episode", range(len(eps)), format_func=label,
+                       key=f"epsel_{key}")
+    ep = eps[idx]
+    st.caption(f"Episode **#{ep['episode']}** · total reward **{ep['reward']:.0f}** · "
+               f"{ep['steps']} steps · {'escaped ✅' if ep['success'] else 'did not escape ❌'}")
+    # token changes with the selection, so the player remounts and restarts
+    token = f"{key}-{idx}-{ep['episode']}"
+    if is_grid:
+        embed(grid_player(key, entry, ep, token), height=board_h)
+    else:
+        embed(U.render_player(render_frames(key, entry, ep), delay_ms=70,
+                              caption=f"episode #{ep['episode']}"), height=board_h)
+
+
+PRETTY = {"alpha": "α", "gamma": "γ", "epsilon": "ε₀", "epsilon_decay": "ε decay",
+          "epsilon_min": "ε min", "optimistic_init": "Q₀ optimistic init",
+          "theta": "θ", "episodes": "episodes", "max_steps": "max steps/episode",
+          "n_tilings": "tilings", "n_bins": "bins/dim", "v_max": "v_max",
+          "shaping": "reward shaping", "shaping_coef": "shaping coef",
+          "hard_walls": "hard walls", "vision": "vision range", "spawn_every": "spawn every"}
+
+
+def params_panel(key, entry):
+    """Show the hyperparameters the displayed model was actually trained with."""
+    def fmt(v):
+        if isinstance(v, bool):
+            return "on" if v else "off"
+        return f"{v:g}" if isinstance(v, float) else str(v)
+
+    chips = "  ".join(f"`{PRETTY.get(k, k)} = {fmt(v)}`" for k, v in entry["params"].items())
+    with st.container(border=True):
+        st.markdown(f"**🧠 Trained model — {ROOMS[key]['algo']}**")
+        st.markdown(chips)
 
 
 def default_params(key):
@@ -408,6 +546,8 @@ def main():
             train(key, p)
 
     entry = store().get(key)
+    if entry:
+        params_panel(key, entry)
     if entry and entry.get("params") != p:
         st.warning("⚙️ You've changed hyperparameters since the last training. Everything below "
                    "still reflects the **previous** run — click **🚀 Train** to apply the new "

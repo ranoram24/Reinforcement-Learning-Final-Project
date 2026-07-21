@@ -14,7 +14,7 @@ import json
 import numpy as np
 import plotly.graph_objects as go
 
-from environments import ACTION_ARROWS
+from environments import ACTION_ARROWS, ACTION_NAMES
 
 # ---- chart palette (consistent across every chart) ----------------------- #
 C_RAW = "#94a3b8"
@@ -31,19 +31,25 @@ THEMES = {
     "ice": dict(  # Ice Age
         movie="Ice Age", board="radial-gradient(circle at 50% 0%, #16436a, #0a1a2e 72%)",
         frame="#38bdf8", accent="#7dd3fc",
-        even="#102a44", odd="#0c2338", start_c="#0e3a2e",
-        wall_c="#1e4d63", pit_c="#7f1d1d", cliff_c="#4c1d95", goal_c="#14532d",
+        even="#102a44", odd="#0c2338", start_c="#3b2f6b",          # purple start
+        wall_c="#0b1c2e", pit_c="#7f1d1d", cliff_c="#4c1d95",
+        goal_c="#7a1f5c",                                           # magenta exit
+        door_c="#5b3a1a", key_c="#8a7a10", bonus_c="#14532d", hazard_c="#7f1d1d",
         slip_a="#0e4a63", slip_b="#1a6f8c",
         agent="🐕", wall="🧊", slip="❄️", slip_name="ice", pit="🕳️", cliff="🕶️",
-        goal="🌄", start="🐾"),
+        goal="🌄", start="🐾", door="🧱", key="🔑", bonus="🌰", hazard="🐯"),
     "temple": dict(  # Raiders of the Lost Ark
         movie="Raiders of the Lost Ark", board="radial-gradient(circle at 50% 0%, #3a2a17, #160f08 72%)",
         frame="#b45309", accent="#f59e0b",
-        even="#2a2018", odd="#1f1712", start_c="#3f2d16",
-        wall_c="#57534e", pit_c="#7f1d1d", cliff_c="#4c1d95", goal_c="#3f3417",
+        even="#2a2018", odd="#1f1712", start_c="#3b2f6b",          # purple start
+        wall_c="#100b06", pit_c="#7f1d1d", cliff_c="#4c1d95",
+        goal_c="#7a1f5c",                                           # magenta exit
+        door_c="#5b3a1a", key_c="#8a7a10", bonus_c="#14532d",
+        hazard_c="#6d1414", button_c="#7c3a06", chaser_c="#a16207",
         slip_a="#4a3418", slip_b="#63481f",
         agent="🐕", wall="🗿", slip="💧", slip_name="mud", pit="🕳️", cliff="🕶️",
-        goal="🏆", start="🐾"),
+        goal="🚪", start="🐾", door="🧱", key="🏆", bonus="💎", hazard="🕳️",
+        button="🔘", chaser="🪨"),
     "matrix": dict(  # The Matrix
         movie="The Matrix", board="radial-gradient(circle at 50% 0%, #012a12, #000600 72%)",
         frame="#22c55e", accent="#00ff41",
@@ -79,52 +85,142 @@ _GRID_CSS = (
     ".rlrw.pos{color:#bbf7d0;background:rgba(20,83,45,.9)}"
     ".rlrw.neg{color:#fecaca;background:rgba(127,29,29,.9)}"
     ".rlst{opacity:.5}"
+    ".rlb td[title]{cursor:help}"
     "</style>")
 
 
-def ARROW(policy, x, y):
-    return ACTION_ARROWS[policy[(x, y)]] if policy and (x, y) in policy else ""
+def _slip_tip(rules):
+    """Readable hover text for a slippery tile's probabilities."""
+    if not rules:                       # Rooms 2-3: one uniform rule for every action
+        return ("Slippery — 70% intended, 10% left, 10% right, 10% backwards "
+                "(applies to every action)")
+    parts = []
+    for a, cands in rules.items():      # Room 1: per-action rules
+        outs = ", ".join(f"{p*100:g}% {ACTION_NAMES[d].lower()}" for p, d in cands)
+        parts.append(f"choose {ACTION_NAMES[a].upper()} → {outs}")
+    return "Slippery — " + "; ".join(parts) + "  |  any other action: 100% as chosen"
 
 
-def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False):
+def ARROW(policy, x, y, mask=0):
+    """Greedy arrow. Supports plain (x,y), key-augmented (x,y,mask) and
+    chaser-augmented (x,y,mask,None) policy keys."""
+    if not policy:
+        return ""
+    a = policy.get((x, y, mask, None),
+                   policy.get((x, y, mask), policy.get((x, y))))
+    return ACTION_ARROWS[a] if a is not None else ""
+
+
+def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
+                     mask=0, chaser=None, ids=False):
     T = THEMES[theme]
     size, walls, ice = meta["size"], meta["walls"], meta["slippery"]
-    pits, cliff = meta["traps"], meta.get("cliff", set())
+    pits, cliff = meta.get("traps", set()), meta.get("cliff", set())
+    doors = meta.get("doors", set())
+    pickups, bits = meta.get("pickups", {}), meta.get("bit", {})
+    prew, hazards = meta.get("pickup_rewards", {}), meta.get("hazards", set())
+    hz_default = meta.get("hazard_reward", 0)
+    hz_resets = meta.get("hazard_resets", False)
+    button = meta.get("button")
+    exit_r = meta.get("exit_reward", 100)
     start, goal = meta["start"], meta["goal"]
     fs = int(cell * 0.5)
 
+    def hz_val(c):      # hazards may be a {cell: reward} dict or a plain set
+        return hazards[c] if isinstance(hazards, dict) else hz_default
+
+    key_cell = next((c for c, ch in pickups.items() if ch == "K"), None)
+    has_key = key_cell is None or bool((mask >> bits[key_cell]) & 1)
+
+    def taken(c):                       # pickup already collected?
+        return c in bits and bool((mask >> bits[c]) & 1)
+
+    def door_shut(c):
+        return c in doors and not has_key
+
     def bg(x, y):
-        if (x, y) in walls:  return T["wall_c"]
-        if (x, y) in pits:   return T["pit_c"]
-        if (x, y) in cliff:  return T["cliff_c"]
-        if (x, y) == goal:   return T["goal_c"]
-        if (x, y) in ice:
+        c = (x, y)
+        if c in walls:      return T["wall_c"]
+        if door_shut(c):    return T.get("door_c", T["wall_c"])
+        if c in pits:       return T["pit_c"]
+        if c in cliff:      return T["cliff_c"]
+        if c == goal:       return T["goal_c"]
+        if c in hazards:    return T.get("hazard_c", T["pit_c"])
+        if c == button and has_key:  return T.get("button_c", T["even"])
+        if c in pickups and not taken(c):
+            return T.get("key_c") if pickups[c] == "K" else T.get("bonus_c")
+        if c in ice:
             return (f"repeating-linear-gradient(45deg,{T['slip_a']},{T['slip_a']} 5px,"
                     f"{T['slip_b']} 5px,{T['slip_b']} 10px)")
-        if (x, y) == start:  return T["start_c"]
+        if c == start:      return T["start_c"]
         return T["even"] if (x + y) % 2 else T["odd"]
 
     def content(x, y):
-        if agent is not None and (x, y) == tuple(agent):
+        c = (x, y)
+        if agent is not None and c == tuple(agent):
             return f"<span style='filter:drop-shadow(0 0 6px {T['accent']})'>{T['agent']}</span>"
-        if (x, y) in walls:  return T["wall"]
-        if (x, y) in pits:   return f"{T['pit']}<span class='rlrw neg'>-100</span>"
-        if (x, y) in cliff:  return f"{T['cliff']}<span class='rlrw neg'>-100</span>"
-        if (x, y) == goal:   return f"{T['goal']}<span class='rlrw pos'>+100</span>"
-        arrow = ARROW(policy, x, y)
-        if (x, y) in ice:
+        if chaser is not None and c == tuple(chaser):
+            return f"<span style='filter:drop-shadow(0 0 7px #f97316)'>{T.get('chaser','🪨')}</span>"
+        if c in walls:      return T["wall"]
+        if door_shut(c):    return T.get("door", "🧱")
+        if c in pits:       return f"{T['pit']}<span class='rlrw neg'>-100</span>"
+        if c in cliff:      return f"{T['cliff']}<span class='rlrw neg'>-100</span>"
+        if c == goal:       return f"{T['goal']}<span class='rlrw pos'>+{exit_r:g}</span>"
+        if c in hazards:    return f"{T.get('hazard','⚠️')}<span class='rlrw neg'>{hz_val(c):g}</span>"
+        if c == button and has_key:
+            return T.get("button", "🔘")
+        if c in pickups and not taken(c):
+            ch = pickups[c]
+            emo = T.get("key") if ch == "K" else T.get("bonus")
+            return f"{emo}<span class='rlrw pos'>+{prew.get(ch, 0):g}</span>"
+        arrow = ARROW(policy, x, y, mask)
+        if c in ice:
             return (f"<span style='color:{T['accent']};font-weight:700'>{arrow}</span>"
                     if arrow else T["slip"])
         if arrow:
             return f"<span style='color:{T['accent']};font-weight:700'>{arrow}</span>"
-        if (x, y) == start:  return f"<span class='rlst'>{T['start']}</span>"
+        if c == start:      return f"<span class='rlst'>{T['start']}</span>"
         return ""
+
+    def tip(x, y):
+        """Hover text — slip probabilities, and what each special tile does."""
+        c = (x, y)
+        if c in walls:      return "Wall — impassable"
+        if door_shut(c):    return "Ice gate — blocked until Hezki holds the key"
+        if c == goal:       return f"Exit — +{exit_r:g}, ends the episode"
+        if c in pits:       return "Pit — −100, ends the episode"
+        if c in cliff:      return "Clones — −100 and back to the start"
+        if c in hazards:
+            tail = " and back to the start" if hz_resets else ""
+            return f"Hazard — {hz_val(c):g}{tail} (does NOT end the episode)"
+        if chaser is not None and c == tuple(chaser):
+            return ("Boulder — retraces your own trail a few steps behind; "
+                    f"if it catches you: {meta.get('catch_reward', 0):g}, "
+                    "back to start and the temple resets")
+        if c == button and has_key:
+            return ("Pressure plate — stepping here wakes the boulder. "
+                    "It is a pure trap: the exit is already open once you hold the idol")
+        if c in pickups and not taken(c):
+            ch = pickups[c]
+            what = ("Key — opens the gate" if ch == "K" else "Bonus pickup")
+            return f"{what} · +{prew.get(ch, 0):g} (one-off)"
+        if c in ice:
+            return _slip_tip(ice.get(c) if isinstance(ice, dict) else None)
+        return None
+
+    def tip_attr(x, y):
+        t = tip(x, y)
+        return f'title="{t}" ' if t else ""
+
+    def id_attr(x, y):
+        return f"id='c{x}_{y}' " if ids else ""
 
     rows = []
     for y in range(size - 1, -1, -1):                        # y=0 at the bottom
         tds = "".join(
-            f"<td style='width:{cell}px;height:{cell}px;background:{bg(x, y)};"
-            f"font-size:{fs}px'>{content(x, y)}</td>" for x in range(size))
+            f"<td {id_attr(x, y)}{tip_attr(x, y)}style='width:{cell}px;height:{cell}px;"
+            f"background:{bg(x, y)};font-size:{fs}px'>{content(x, y)}</td>"
+            for x in range(size))
         rows.append(f"<tr>{tds}</tr>")
     board = f"<table class='rlb' style='border:2px solid {T['frame']}'>{''.join(rows)}</table>"
     if fill:   # static view: fill + vertically centre the board in the themed frame
@@ -144,6 +240,29 @@ def render_legend(theme, meta):
         else:
             chips += [(T["drone"], "drone · hit −1000"), ("👁️", "vision (sensor)"),
                       ("✅", "survive · +1 / step")]
+    elif meta.get("kind") == "keydoor":                     # key-and-door rooms
+        prew = meta.get("pickup_rewards", {})
+        hz = meta.get("hazards", {})
+        hz_vals = (sorted(set(hz.values())) if isinstance(hz, dict)
+                   else [meta.get("hazard_reward", 0)])
+        bonus = sorted({v for k, v in prew.items() if k != "K"})
+        chips += [
+            (T["slip"], f"{T['slip_name']} · slippery (per-action)"),
+            (T["wall"], "wall"),
+            (T["key"], f"key · +{prew.get('K', 0):g} (opens the gate)"),
+            (T["door"], "gate · needs the key"),
+            (T["bonus"], "bonus · +" + " / +".join(f"{b:g}" for b in bonus)),
+            (T["hazard"], "hazard · " + " / ".join(f"{v:g}" for v in hz_vals)
+                          + (" + back to start" if meta.get("hazard_resets") else "")),
+        ]
+        if meta.get("button"):
+            chips += [(T.get("button", "🔘"), "plate · wakes the chaser (trap!)"),
+                      (T.get("chaser", "🪨"),
+                       f"chaser · {meta.get('catch_reward', 0):g} + resets the room")]
+        chips += [
+            (T["goal"], f"exit · +{meta.get('exit_reward', 100):g} (terminal)"),
+            ("👣", "each step · 0"),
+        ]
     else:
         if meta.get("slippery"):
             chips.append((T["slip"], f"{T['slip_name']} · slippery 70/10/10/10"))
@@ -238,6 +357,71 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
 # ========================================================================== #
 # Client-side replay player (smooth, no Streamlit reruns)
 # ========================================================================== #
+def render_player_grid(boards, frames, agent, chaser, accent, board_bg,
+                       delay_ms=140, token="", notes=None):
+    """Exact step-by-step grid replay.
+
+    `boards` maps each collected-mask seen in the episode to a full board HTML
+    (cells carry id="cX_Y"); `frames` is one tiny record PER STEP:
+    ``{"m": mask, "a": [x, y], "c": [x, y] | null}``.  Only the two changed
+    cells are repainted, so every single step is shown without any
+    down-sampling (which is what previously made moves look diagonal).
+    """
+    data = json.dumps({"B": boards, "F": frames, "N": notes or []})
+    return f"""
+<div id="wrap-{token}" style="font-family:system-ui,Segoe UI,sans-serif;text-align:center;
+     color:#e2e8f0;background:{board_bg};padding:10px;border-radius:14px">
+  <div id="stage"></div>
+  <div id="note" style="margin-top:8px;font-size:13px;color:#e2e8f0;background:rgba(15,23,42,.75);
+       border:1px solid #334155;border-radius:8px;padding:7px 12px;display:inline-block;
+       font-family:ui-monospace,Consolas,monospace;min-height:18px"></div>
+  <div style="margin-top:10px;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap">
+    <button id="pp" style="padding:6px 14px;border-radius:8px;border:1px solid #334155;
+      background:#1e293b;color:#e2e8f0;cursor:pointer;font-size:14px">⏸ Pause</button>
+    <button id="rw" style="padding:6px 12px;border-radius:8px;border:1px solid #334155;
+      background:#1e293b;color:#e2e8f0;cursor:pointer;font-size:14px">⏮ Restart</button>
+    <input id="sl" type="range" min="0" max="{max(0, len(frames)-1)}" value="0" style="width:40%">
+    <span id="lbl" style="font-variant-numeric:tabular-nums;color:#94a3b8">step 0/{max(0, len(frames)-1)}</span>
+    <label style="color:#94a3b8;font-size:13px">speed
+      <input id="sp" type="range" min="30" max="600" value="{delay_ms}" style="width:110px"></label>
+  </div>
+</div>
+<script>
+(function(){{
+  const D = {data}, F = D.F, B = D.B, N = D.N;
+  const AG = {json.dumps(agent)}, CH = {json.dumps(chaser)}, AC = {json.dumps(accent)};
+  const stage=document.getElementById('stage'), sl=document.getElementById('sl'),
+        lbl=document.getElementById('lbl'), pp=document.getElementById('pp'),
+        rw=document.getElementById('rw'), sp=document.getElementById('sp'),
+        note=document.getElementById('note');
+  let i=0, playing=true, delay={delay_ms}, timer=null, cur=null, prev=[];
+  function paint(k){{
+    const f=F[k];
+    if(f.m!==cur){{ stage.innerHTML=B[f.m]; cur=f.m; prev=[]; }}
+    for(const p of prev){{ const e=document.getElementById(p[0]); if(e) e.innerHTML=p[1]; }}
+    prev=[];
+    function put(xy, emo, glow){{
+      const id='c'+xy[0]+'_'+xy[1], el=document.getElementById(id);
+      if(!el) return;
+      prev.push([id, el.innerHTML]);
+      el.innerHTML="<span style='filter:drop-shadow(0 0 6px "+glow+")'>"+emo+"</span>";
+    }}
+    if(f.c) put(f.c, CH, '#f97316');
+    put(f.a, AG, AC);
+    i=k; sl.value=k; lbl.textContent='step '+k+'/'+(F.length-1);
+    if(note) note.textContent = (N && N[k]) ? N[k] : '';
+  }}
+  function tick(){{ if(i>=F.length-1){{ playing=false; pp.textContent='▶ Play'; return; }} paint(i+1); }}
+  function loop(){{ if(timer) clearInterval(timer); timer=setInterval(function(){{ if(playing) tick(); }}, delay); }}
+  pp.onclick=function(){{ if(i>=F.length-1) paint(0); playing=!playing; pp.textContent=playing?'⏸ Pause':'▶ Play'; }};
+  rw.onclick=function(){{ paint(0); playing=true; pp.textContent='⏸ Pause'; }};
+  sl.oninput=function(){{ playing=false; pp.textContent='▶ Play'; paint(parseInt(sl.value)); }};
+  sp.oninput=function(){{ delay=parseInt(sp.value); loop(); }};
+  paint(0); loop();
+}})();
+</script>"""
+
+
 def render_player(frames, delay_ms=90, autoplay=True, caption=""):
     data = json.dumps(frames)
     auto = "true" if autoplay else "false"
@@ -329,10 +513,17 @@ def length_curve(lengths, window=50, title="Episode length", ylab="Steps"):
     return _layout(fig, title, "Episode", ylab)
 
 
-def value_heatmap(V, meta):
+def value_heatmap(V, meta, mask=0):
+    """Heat-map of V(s).  Key-augmented states (x,y,mask) are sliced at `mask`."""
     size = meta["size"]
     z = np.full((size, size), np.nan)
-    for (x, y), v in V.items():
+    for k, v in V.items():
+        if len(k) == 3:
+            x, y, m = k
+            if m != mask:
+                continue
+        else:
+            x, y = k
         z[y, x] = v
     for (x, y) in meta["walls"]:
         z[y, x] = np.nan

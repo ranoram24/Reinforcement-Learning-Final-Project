@@ -19,39 +19,140 @@ import environments as E        # noqa: E402
 # Shared grid dynamics
 # --------------------------------------------------------------------------- #
 def test_slip_distribution_sums_to_one():
-    for env in (E.Room1FrozenArchive(), E.Room2DarkTemple()):
-        for s in env.states():
-            if env.is_terminal(s):
-                continue
-            for a in env.actions:
-                total = sum(p for p, _ in env.outcomes(s, a))
-                assert abs(total - 1.0) < 1e-9
-
-
-def test_slippery_tiles_are_stochastic_others_not():
     env = E.Room1FrozenArchive()
-    ice = next(iter(env.slippery))
-    assert len(env.outcomes(ice, E.UP)) > 1             # ice → several outcomes
-    assert len(env.outcomes((0, 0), E.UP)) == 1         # normal → deterministic
+    for s in env.states():
+        if env.is_terminal(s):
+            continue
+        for a in env.actions:
+            assert abs(sum(p for p, _ in env.outcomes(s, a)) - 1.0) < 1e-9
+    # Room 2 has no DP model (SARSA is model-free) — sweep its cells directly
+    r2 = E.Room2DarkTemple()
+    for x in range(r2.SIZE):
+        for y in range(r2.SIZE):
+            if (x, y) in r2.walls:
+                continue
+            for a in r2.actions:
+                assert abs(sum(p for p, _ in r2.outcomes((x, y, 0, None), a)) - 1.0) < 1e-9
+
+
+def test_slip_applies_only_to_the_named_action():
+    """Room 1 slip is per-tile AND per-action: only the action the tile names is
+    stochastic; every other action on that same tile is deterministic."""
+    env = E.Room1FrozenArchive()
+    found = None
+    for cell, rules in env.slippery.items():
+        for act in rules:
+            s = (cell[0], cell[1], 0)
+            if len(env.outcomes(s, act)) > 1:
+                found = (s, act)
+                break
+        if found:
+            break
+    assert found, "expected at least one genuinely stochastic slip tile"
+    s, slip_act = found
+    assert len(env.outcomes(s, slip_act)) > 1                 # named action slips
+    for other in env.actions:
+        if other != slip_act:
+            assert len(env.outcomes(s, other)) == 1           # others deterministic
 
 
 def test_terminals_absorbing_and_rewarded():
+    # the exit never appears as a decision state in Room 1's DP model
+    r1 = E.Room1FrozenArchive()
+    assert all((s[0], s[1]) != r1.exit for s in r1.build_model())
+
+
+def test_room2_pits_reset_to_start_without_ending_episode():
+    env = E.Room2DarkTemple(seed=0)
+    pit, cost = next(iter(env.holes.items()))
+    nb = next(n for n in [(pit[0], pit[1] + 1), (pit[0], pit[1] - 1),
+                          (pit[0] + 1, pit[1]), (pit[0] - 1, pit[1])]
+              if env.in_bounds(n) and n not in env.walls and n not in env.slippery)
+    d = {(0, 1): E.DOWN, (0, -1): E.UP, (1, 0): E.LEFT, (-1, 0): E.RIGHT}[
+        (nb[0] - pit[0], nb[1] - pit[1])]
+    env._state = (nb[0], nb[1], 0, None)
+    s, r, done = env.step(d)                     # step into the pit
+    assert (s[0], s[1]) == env.start             # hurled back to the start
+    assert r == cost and not done                # penalty, but episode continues
+
+
+def test_room2_gate_needs_the_idol_and_exit_is_terminal():
     env = E.Room2DarkTemple()
-    r, done = env.reward_done(env.goal)
-    assert done and r == E.GOAL_REWARD
-    for pit in env.traps:
-        r, done = env.reward_done(pit)
-        assert done and r == E.TRAP_REWARD
-    # terminals never appear as decision states in the DP model
-    model = E.Room1FrozenArchive().build_model()
-    assert (9, 9) not in model
+    door = next(iter(env.doors))
+    nb = (door[0] + 1, door[1])                  # step left into the gate
+    assert env._move((nb[0], nb[1], 0), E.LEFT) == nb                    # shut
+    assert env._move((nb[0], nb[1], 1 << env.key_bit), E.LEFT) == door   # open
+    env._state = (door[0], door[1], 1 << env.key_bit, None)
+    s, r, done = env.step(E.LEFT)                # gate -> exit
+    assert (s[0], s[1]) == env.exit and done and r == env.EXIT_REWARD
+
+
+def test_room2_plate_only_arms_with_the_idol():
+    env = E.Room2DarkTemple(seed=0)
+    right = (env.button[0] + 1, env.button[1])          # free cell east of the plate
+    # without the idol the plate is inert
+    env.reset(); env._state = (right[0], right[1], 0, None)
+    s, _, _ = env.step(E.LEFT)
+    assert (s[0], s[1]) == env.button and s[3] is None
+    # holding the idol, stepping on it wakes the boulder AT ONCE, where the idol lay
+    env.reset(); env._state = (right[0], right[1], 1 << env.key_bit, None)
+    env._path = [env.chaser_spawn, right]               # we arrived via the idol tile
+    s, _, _ = env.step(E.LEFT)
+    assert s[3] == env.chaser_spawn
+
+
+def test_room2_boulder_moves_every_step_and_catches_on_backtrack():
+    """No lag: the boulder steps once per agent move, retracing the agent's route,
+    so doubling back walks straight into it and resets the temple."""
+    env = E.Room2DarkTemple(seed=0)
+    right = (env.button[0] + 1, env.button[1])
+    env.reset(); env._state = (right[0], right[1], 1 << env.key_bit, None)
+    env._path = [env.chaser_spawn, right]
+    s, _, _ = env.step(E.LEFT)                          # onto the plate → boulder appears
+    assert s[3] == env.chaser_spawn
+    caught = False
+    for _ in range(20):                                 # oscillate = backtrack
+        for act in (E.RIGHT, E.LEFT):
+            s, r, done = env.step(act)
+            if r <= env.CATCH_REWARD:
+                caught = True
+                break
+        if caught:
+            break
+    assert caught, "backtracking should run into the boulder"
+    assert (s[0], s[1]) == env.start and s[2] == 0 and s[3] is None   # temple reset
 
 
 def test_wall_blocks_movement():
     env = E.Room1FrozenArchive()
-    wx, wy = next(iter(env.walls))              # step towards a wall from its left
-    outs = dict((s2, p) for p, s2 in env.outcomes((wx - 1, wy), E.RIGHT))
-    assert (wx, wy) not in outs                 # cannot enter the wall
+    pair = next(((w, (w[0] - 1, w[1])) for w in env.walls
+                 if w[0] > 0 and (w[0] - 1, w[1]) not in env.walls
+                 and (w[0] - 1, w[1]) not in env.doors), None)
+    assert pair, "expected a wall with a free cell to its left"
+    wall, left = pair
+    assert env._move((left[0], left[1], 0), E.RIGHT) == left   # bounced off the wall
+
+
+def test_key_gates_the_door_then_opens_it():
+    env = E.Room1FrozenArchive()
+    door = next(iter(env.doors))
+    nb = (door[0], door[1] + 1)                    # a neighbour that can step in
+    if nb in env.walls or nb[1] >= env.SIZE:
+        nb = (door[0] + 1, door[1])
+    no_key, with_key = 0, 1 << env.key_bit
+    toward = E.DOWN if nb == (door[0], door[1] + 1) else E.LEFT
+    assert env._move((nb[0], nb[1], no_key), toward) == nb        # gate is shut
+    assert env._move((nb[0], nb[1], with_key), toward) == door    # key opens it
+
+
+def test_pickups_are_one_off_and_step_reward_is_zero():
+    env = E.Room1FrozenArchive()
+    r, mask, done = env._enter(env.key_cell, 0)
+    assert r == env.PICKUPS["K"] and env.has_key(mask) and not done
+    r2, _, _ = env._enter(env.key_cell, mask)      # already taken → no reward again
+    assert r2 == env.STEP_REWARD == 0.0
+    r3, _, done3 = env._enter(env.exit, mask)      # exit is terminal, +100
+    assert done3 and r3 == env.EXIT_REWARD
 
 
 # --------------------------------------------------------------------------- #
@@ -61,7 +162,12 @@ def test_value_iteration_converges_and_solves():
     env = E.Room1FrozenArchive()
     res = A.ValueIteration(env, gamma=0.99, theta=1e-4).run()
     assert res["deltas"][-1] < 1e-4                       # converged
-    assert res["V"][(0, 0)] > 0                            # start is valuable
+    assert res["V"][(env.start[0], env.start[1], 0)] > 0   # start is valuable
+    # the optimal plan really is: take the key, pass the gate, reach the exit
+    roll = A.rollout(E.Room1FrozenArchive(seed=1), res["final_policy"], max_steps=300)
+    path = [f["agent"] for f in roll["frames"]]
+    assert roll["success"] and path[-1] == env.exit
+    assert env.key_cell in path and any(p in env.doors for p in path)
     roll = A.rollout(env, res["final_policy"], max_steps=200)
     assert roll["success"]                                 # optimal policy escapes
 
@@ -70,13 +176,16 @@ def test_value_iteration_converges_and_solves():
 # Room 2 / Room 3 — TD control
 # --------------------------------------------------------------------------- #
 def test_sarsa_learns_to_escape():
+    """Room 2 is a zig-zag corridor where ε-greedy alone never finds the idol —
+    optimistic initialisation is what makes it learnable."""
     env = E.Room2DarkTemple(seed=0)
-    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_decay=0.995,
-                  episodes=1500, max_steps=300, seed=0).train(snapshots=3)
-    # robust to slip stochasticity: the learned policy escapes the large majority of runs
+    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=0.10, epsilon_decay=1.0,
+                  episodes=3000, max_steps=400, optimistic_init=500.0,
+                  seed=0).train(snapshots=3)
     ev = E.Room2DarkTemple(seed=1)
-    wins = sum(A.rollout(ev, res["final_policy"], max_steps=200)["success"] for _ in range(20))
-    assert wins >= 18
+    wins = sum(A.rollout(ev, res["final_policy"], max_steps=400)["success"]
+               for _ in range(15))
+    assert wins >= 13                          # robust to the per-action slips
 
 
 def test_cliff_resets_not_terminal_and_qlearning_hugs_cliff():
