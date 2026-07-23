@@ -71,18 +71,17 @@ def store():
     return st.session_state.setdefault("store", {})
 
 
-def eps_note(e0, decay, emin, episodes):
-    """Tell the user when ε actually bottoms out — a 0.9 decay hits the floor in
-    ~30 episodes, which is invisible on a 3000-episode run."""
+def eps_note(e0, k, emin, episodes):
+    """Linear decay ε = ε₀ − K·t — tell the user when ε reaches its floor."""
     import math
-    if decay >= 1.0:
-        return f"ε stays at **{e0:g}** for all {episodes} episodes (no decay)."
+    if k <= 0:
+        return f"ε stays at **{e0:g}** for all {episodes} episodes (K = 0, no decay)."
     if e0 <= emin:
         return f"ε is already at its minimum ({emin:g})."
-    n = math.ceil(math.log(emin / e0) / math.log(decay))
+    n = math.ceil((e0 - emin) / k)
     pct = 100 * min(n, episodes) / max(episodes, 1)
-    return (f"ε falls from {e0:g} → {emin:g} after **~{n} episodes** "
-            f"({pct:.0f}% of the {episodes}-episode run).")
+    return (f"ε = ε₀ − K·t : falls **{e0:g} → {emin:g}** at −{k:g}/episode, reaching the "
+            f"floor after **~{n} episodes** ({pct:.0f}% of the {episodes}-episode run).")
 
 
 # --------------------------------------------------------------------------- #
@@ -113,18 +112,18 @@ def sidebar():
         # idol, so it defaults to low ε + optimistic init (directed exploration).
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key=f"a{key}")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key=f"g{key}")
-        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.10, 1.0,
+        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0,
                                          0.10 if r2 else 1.0, 0.01, key=f"e{key}")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0,
-                                               1.0 if r2 else 0.9950, 0.0005,
-                                               format="%.4f", key=f"ed{key}")
+        p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
+                                           0.0, 0.05, 0.0 if r2 else 0.0010, 0.0001,
+                                           format="%.4f", key=f"ed{key}")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.50, 0.01, 0.01, key=f"em{key}")
         p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 3000.0,
                                                  500.0 if r2 else 0.0, 50.0, key=f"oi{key}")
         p["episodes"] = st.sidebar.number_input("episodes", 100, 40000,
                                                 3000 if r2 else 1000, 100, key=f"ep{key}")
         p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000, 400, 1, key=f"ms{key}")
-        st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_decay"],
+        st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"],
                                     p["epsilon_min"], p["episodes"]))
         if r2:
             st.sidebar.caption("Step reward is 0 here; the idol (+1000) opens the gate to the "
@@ -133,9 +132,9 @@ def sidebar():
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
-        p["epsilon"] = st.sidebar.slider("ε  exploration", 0.10, 1.0, 0.10, 0.01, key="e4")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0, 1.0, 0.0005,
-                                              format="%.4f", key="ed4")
+        p["epsilon"] = st.sidebar.slider("ε₀  exploration", 0.10, 1.0, 0.10, 0.01, key="e4")
+        p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
+                                           0.0, 0.05, 0.0, 0.0001, format="%.4f", key="ed4")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 2000, 100, key="ep4")
         with st.sidebar.expander("Function-approximation & physics"):
             p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 200.0, 100.0, 10.0, key="oi4")
@@ -147,17 +146,19 @@ def sidebar():
             p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 10.0, 5.0, 0.5, key="sc4")
             p["hard_walls"] = st.checkbox("hard walls (−100 terminal on boundary)", False, key="hw4")
         p["epsilon_min"] = 0.0
+        st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
         st.sidebar.caption("⏱️ ~1 min to train at default settings.")
     else:  # room5
         p["vision"] = st.sidebar.slider("👁️ vision range X_obs (m)", 0.5, 8.0, 3.0, 0.5, key="v5")
         p["spawn_every"] = st.sidebar.slider("drone spawn every N steps", 5, 60, 15, 1, key="sp5")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key="a5")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.95, 0.001, key="g5")
-        p["epsilon"] = st.sidebar.slider("ε  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
-        p["epsilon_decay"] = st.sidebar.slider("ε decay / episode", 0.9900, 1.0, 0.9990, 0.0005,
-                                              format="%.4f", key="ed5")
+        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
+        p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
+                                           0.0, 0.05, 0.0004, 0.0001, format="%.4f", key="ed5")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key="em5")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 3000, 100, key="ep5")
+        st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
         with st.sidebar.expander("Physics"):
             p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 5.0, 0.5, key="vm5")
             p["max_steps"] = st.number_input("max steps (survival cap)", 0, 3000, 500, 1, key="ms5")
@@ -215,7 +216,7 @@ def train(key, p):
         entry.update(res=res, policy=res["policy"], final_policy=res["final_policy"])
     else:
         common = dict(alpha=p["alpha"], gamma=p["gamma"], epsilon=p["epsilon"],
-                      epsilon_decay=p["epsilon_decay"], epsilon_min=p["epsilon_min"],
+                      epsilon_k=p["epsilon_k"], epsilon_min=p["epsilon_min"],
                       episodes=p["episodes"], seed=0)
         if key == "room4":
             agent = A.LinearFAAgent(env, optimistic_init=p["optimistic_init"],
@@ -382,8 +383,13 @@ def tab_charts(key, entry):
         st.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
 
 
+def discounted_return(step_rewards, gamma):
+    """G = Σ γᵗ·rₜ  — the *return* as defined in RL (the raw sum is not a return)."""
+    return sum((gamma ** t) * r for t, r in enumerate(step_rewards or []))
+
+
 def episode_list(key, entry):
-    """Recorded episodes for this room, best total reward first."""
+    """Recorded episodes for this room, best (discounted) return first."""
     cache = st.session_state.setdefault("epcache", {})
     ck = (key, id(entry))
     if ck in cache:
@@ -395,10 +401,15 @@ def episode_list(key, entry):
         for i in range(20):
             roll = eval_roll(key, entry, entry["final_policy"], seed=100 + i)
             eps.append(dict(episode=i, reward=roll["reward"], steps=roll["steps"],
-                            success=roll["success"], frames=roll["frames"]))
+                            success=roll["success"], frames=roll["frames"],
+                            actions=roll.get("actions"),
+                            step_rewards=roll.get("step_rewards")))
     else:
         eps = list(entry["res"].get("tapes", []))
-    eps.sort(key=lambda e: -e["reward"])
+    gamma = float(entry["params"].get("gamma", 1.0))
+    for e in eps:                                   # attach the discounted return
+        e["ret"] = discounted_return(e.get("step_rewards"), gamma)
+    eps.sort(key=lambda e: -e["ret"])               # best return first
     cache[ck] = eps
     return eps
 
@@ -409,15 +420,18 @@ def step_notes(entry, ep):
     inv_bit = {i: c for c, i in meta.get("bit", {}).items()}
     pickups, prew = meta.get("pickups", {}), meta.get("pickup_rewards", {})
     start = meta.get("start")
+    gamma = float(entry["params"].get("gamma", 1.0))
     frames = ep["frames"]
     acts = ep.get("actions") or []
     rews = ep.get("step_rewards") or []
-    notes, cum = ["▶ start of episode"], 0.0
+    notes = ["▶ start of episode  ·  discounted reward 0  ·  total reward 0"]
+    cum, disc = 0.0, 0.0
     for i in range(1, len(frames)):
         prev, cur = frames[i - 1], frames[i]
         a = acts[i - 1] if i - 1 < len(acts) else None
         r = float(rews[i - 1]) if i - 1 < len(rews) else 0.0
         cum += r
+        disc += (gamma ** (i - 1)) * r              # discount by steps-so-far
         arrow = E.ACTION_ARROWS.get(a, "") if a is not None else ""
         name = E.ACTION_NAMES.get(a, "?") if a is not None else "?"
         ev = []
@@ -428,17 +442,17 @@ def step_notes(entry, ep):
                 ev.append(f"took the {'key' if ch == 'K' else 'bonus'} "
                           f"(+{prew.get(ch, 0):g})")
         if prev.get("chaser") is not None and cur.get("chaser") is None and r < 0:
-            ev.append("caught by the chaser → room reset")
+            ev.append("caught by the boulder → big penalty (stays put, boulder gone)")
         elif (start and tuple(cur["agent"]) == tuple(start)
               and tuple(prev["agent"]) != tuple(start) and r < 0):
             ev.append("fell into a pit → back to start")
         if tuple(cur["agent"]) == tuple(prev["agent"]) and not ev:
-            ev.append("blocked — walked into a wall/edge")
+            ev.append("slipped on ice → stayed in place")
         if i == len(frames) - 1 and ep.get("success"):
             ev.append("reached the EXIT 🎉")
         notes.append(f"step {i}  {arrow} {name}  ·  "
-                     f"{', '.join(ev) if ev else 'moved'}  ·  "
-                     f"reward {r:+.0f}  ·  total {cum:+.0f}")
+                     f"{', '.join(ev) if ev else 'moved'}  ·  reward {r:+.0f}  ·  "
+                     f"discounted reward {disc:+.0f}  ·  total reward {cum:+.0f}")
     return notes
 
 
@@ -480,20 +494,26 @@ def tab_replay(key, entry, random_clicked):
         st.info("No episodes were recorded for this run.")
         return
 
-    st.caption("Pick an episode to replay — **sorted best total reward first**. "
-               "Every step is shown exactly; if Hezki seems to stand still he tried to "
-               "walk into a wall (the only actions are up / down / left / right).")
+    gamma = float(entry["params"].get("gamma", 1.0))
+    st.caption("Pick an episode to replay — **sorted by discounted reward first**. "
+               "**discounted reward** = Σγᵗ·rₜ (the objective the agent optimises, "
+               f"γ = {gamma:g}), so a *faster* escape scores higher. "
+               "**total reward (without discount)** = raw Σrₜ. "
+               "Hezki can only choose *legal* moves (walls are removed from his actions), "
+               "so if he stays put he **slipped** on ice.")
 
     def label(i):
         e = eps[i]
         tick = "✅" if e["success"] else "❌"
-        return (f"{tick}  return {e['reward']:>8.0f}   ·   {e['steps']:>4d} steps"
-                f"   ·   episode #{e['episode']}")
+        return (f"{tick}  discounted reward {e['ret']:>8.0f}   ·   "
+                f"total reward {e['reward']:>8.0f}   ·   {e['steps']:>4d} steps   ·   #{e['episode']}")
 
     idx = st.selectbox("Episode", range(len(eps)), format_func=label,
                        key=f"epsel_{key}")
     ep = eps[idx]
-    st.caption(f"Episode **#{ep['episode']}** · total reward **{ep['reward']:.0f}** · "
+    st.caption(f"Episode **#{ep['episode']}** · "
+               f"discounted reward Σγᵗrₜ = **{ep['ret']:.0f}** (γ = {gamma:g}) · "
+               f"total reward (without discount) Σrₜ = **{ep['reward']:.0f}** · "
                f"{ep['steps']} steps · {'escaped ✅' if ep['success'] else 'did not escape ❌'}")
     # token changes with the selection, so the player remounts and restarts
     token = f"{key}-{idx}-{ep['episode']}"
@@ -504,7 +524,7 @@ def tab_replay(key, entry, random_clicked):
                               caption=f"episode #{ep['episode']}"), height=board_h)
 
 
-PRETTY = {"alpha": "α", "gamma": "γ", "epsilon": "ε₀", "epsilon_decay": "ε decay",
+PRETTY = {"alpha": "α", "gamma": "γ", "epsilon": "ε₀", "epsilon_k": "ε decrement K",
           "epsilon_min": "ε min", "optimistic_init": "Q₀ optimistic init",
           "theta": "θ", "episodes": "episodes", "max_steps": "max steps/episode",
           "n_tilings": "tilings", "n_bins": "bins/dim", "v_max": "v_max",

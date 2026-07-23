@@ -62,6 +62,15 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 > **only** when the agent chooses that action; **every other action on the same tile is
 > deterministic (100%)**. Any outcome that would hit a wall or the boundary keeps the agent
 > in place. Hover a slippery tile in the app to read its exact probabilities.
+>
+> **Action masking (all grid rooms).** A move into a wall/boundary is **removed from the
+> agent's action set** for that state (`env.valid_actions`) — the agent can only *choose*
+> legal moves, so it never wastes a step bumping a wall. A "stay" in a replay is therefore
+> always a *slip*, never a wall bump. (Continuous rooms 4–5 have no discrete walls to mask;
+> there, avoiding the cars/boundary is the learning task itself.)
+>
+> **ε decay is LINEAR:** `ε = max(ε_min, ε₀ − K·t)` where `t` = episode and **K** is a tunable
+> hyperparameter (the per-episode decrement). K = 0 keeps ε fixed.
 
 ### Room 1 · The Frozen Archive — Value Iteration (DP)
 A **key-and-door puzzle**: Hezki must grab the key (which melts the ice-gate), then reach the exit.
@@ -102,10 +111,16 @@ E # . . . . . . x .
 A **Raiders-style idol run**: take the golden idol (key) to open the stone gate, then reach the
 exit — without doubling back once the boulder is awake.
 
-* **State** augmented like Room 1, plus the boulder: `s = (x, y, mask, boulder-offset)`.
-  `mask` covers the idol + 6 treasures (one-off); the boulder enters the state as a *relative*
-  offset (clipped to ±3), which keeps the table small. Model *unknown* — learned by interaction:
+* **State — a deliberate abstraction.** The *environment* tracks the full one-off pickup
+  bitmask (idol + treasures), so nothing can be farmed twice. The *agent* observes only
+  `s = (x, y, holding-the-idol?, boulder-offset)` (offset clipped to ±3).
+  Model *unknown* — learned by interaction:
   `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]` (**on-policy**).
+* **Why abstract the state?** Exposing all `2¹⁰` pickup combinations to the agent left almost
+  every state barely visited, so the greedy policy contained **cycles**: 22 % of runs dead-looped
+  until the step cap (**78 % escape**, 118 steps). Dropping the pickup bits halves the table and
+  gives **100 % escape in ~40 steps** — a textbook demonstration of the curse of dimensionality
+  and of choosing the right state representation.
 * **Layout (Level 2)** — row 0 = top (`h`/`H` = pit −50/−100, `B` = pressure plate,
   `K` = idol, `G` = treasure):
 

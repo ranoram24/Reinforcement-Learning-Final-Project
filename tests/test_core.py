@@ -87,32 +87,41 @@ def test_room2_gate_needs_the_idol_and_exit_is_terminal():
     assert (s[0], s[1]) == env.exit and done and r == env.EXIT_REWARD
 
 
-def test_room2_plate_only_arms_with_the_idol():
+def test_room2_plate_pays_once_then_is_consumed_and_wakes_boulder():
     env = E.Room2DarkTemple(seed=0)
     right = (env.button[0] + 1, env.button[1])          # free cell east of the plate
+    key = 1 << env.key_bit
     # without the idol the plate is inert
     env.reset(); env._state = (right[0], right[1], 0, None)
-    s, _, _ = env.step(E.LEFT)
-    assert (s[0], s[1]) == env.button and s[3] is None
-    # holding the idol, stepping on it wakes the boulder AT ONCE, where the idol lay
-    env.reset(); env._state = (right[0], right[1], 1 << env.key_bit, None)
+    s, r, _ = env.step(E.LEFT)
+    assert (s[0], s[1]) == env.button and s[3] is None and r == 0.0
+    # holding the idol: first press pays +BUTTON_REWARD, consumes the plate, wakes boulder
+    env.reset(); env._state = (right[0], right[1], key, None)
     env._path = [env.chaser_spawn, right]               # we arrived via the idol tile
-    s, _, _ = env.step(E.LEFT)
-    assert s[3] == env.chaser_spawn
+    s, r, _ = env.step(E.LEFT)
+    assert r == env.BUTTON_REWARD and s[3] == env.chaser_spawn
+    assert (s[2] >> env.button_bit) & 1                 # plate marked as used
+    # stepping on it again pays nothing (consumed)
+    env._state = (right[0], right[1], s[2], None); env._chaser_i = None
+    s2, r2, _ = env.step(E.LEFT)
+    assert r2 == 0.0
 
 
-def test_room2_boulder_moves_every_step_and_catches_on_backtrack():
-    """No lag: the boulder steps once per agent move, retracing the agent's route,
-    so doubling back walks straight into it and resets the temple."""
+def test_room2_boulder_catch_penalises_but_leaves_agent_in_place():
+    """Being caught costs CATCH_REWARD and the boulder vanishes, but the agent
+    STAYS where it is (no teleport) and keeps everything — it just heads on to
+    the exit."""
     env = E.Room2DarkTemple(seed=0)
     right = (env.button[0] + 1, env.button[1])
-    env.reset(); env._state = (right[0], right[1], 1 << env.key_bit, None)
+    key = 1 << env.key_bit
+    env.reset(); env._state = (right[0], right[1], key, None)
     env._path = [env.chaser_spawn, right]
-    s, _, _ = env.step(E.LEFT)                          # onto the plate → boulder appears
-    assert s[3] == env.chaser_spawn
-    caught = False
-    for _ in range(20):                                 # oscillate = backtrack
+    s, _, _ = env.step(E.LEFT)                          # press plate → boulder appears
+    mask_after_press = s[2]
+    caught, before = False, None
+    for _ in range(20):                                 # oscillate = backtrack into it
         for act in (E.RIGHT, E.LEFT):
+            before = (env._state[0], env._state[1])
             s, r, done = env.step(act)
             if r <= env.CATCH_REWARD:
                 caught = True
@@ -120,7 +129,10 @@ def test_room2_boulder_moves_every_step_and_catches_on_backtrack():
         if caught:
             break
     assert caught, "backtracking should run into the boulder"
-    assert (s[0], s[1]) == env.start and s[2] == 0 and s[3] is None   # temple reset
+    assert s[3] is None                                 # boulder gone
+    assert (s[0], s[1]) != env.start                    # NOT teleported to start
+    assert s[2] == mask_after_press                     # key + plate-used KEPT (no reset)
+    assert env.has_key(s[2]) and (s[2] >> env.button_bit) & 1
 
 
 def test_wall_blocks_movement():
@@ -175,11 +187,51 @@ def test_value_iteration_converges_and_solves():
 # --------------------------------------------------------------------------- #
 # Room 2 / Room 3 — TD control
 # --------------------------------------------------------------------------- #
+def test_action_masking_matches_the_legal_moves_in_every_grid_room():
+    """valid_actions must be exactly the legal (non-wall) moves.  The only
+    exception is a fully-enclosed cell (no legal move at all), where it falls
+    back to all actions so nothing can crash — those cells are never real
+    decision states (e.g. the key-gated exit corner)."""
+    def legal_dest(env, s, a):
+        nxt = (s[0] + E._DELTA[a][0], s[1] + E._DELTA[a][1])
+        if not env.in_bounds(nxt):
+            return False
+        if isinstance(env, E.Room3CloningLab):
+            return not env.is_wall(nxt)
+        return not env.blocked(nxt, s[2])
+
+    for env in (E.Room1FrozenArchive(), E.Room2DarkTemple(), E.Room3CloningLab()):
+        if isinstance(env, E.Room3CloningLab):
+            states = [s for s in env.states() if not env.is_terminal(s)]
+        else:
+            states = [(x, y, m) for x in range(env.SIZE) for y in range(env.SIZE)
+                      if (x, y) not in env.walls for m in (0, 1)]
+        for s in states:
+            legal = [a for a in env.actions if legal_dest(env, s, a)]
+            va = env.valid_actions(s)
+            if legal:                              # normal cell: exactly the legal moves
+                assert set(va) == set(legal), (type(env).__name__, s, va, legal)
+            else:                                  # enclosed: fallback = all actions
+                assert set(va) == set(env.actions)
+
+
+def test_linear_epsilon_decay():
+    """ε must fall LINEARLY by K each episode (ε = ε₀ − K·t), floored at ε_min."""
+    env = E.Room3CloningLab(seed=0)
+    ag = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.01,
+                     epsilon_min=0.1, episodes=200, max_steps=50, seed=0)
+    eps = ag.train(snapshots=1)["epsilons"]
+    # after ep 0 the stored value is ε₀−K, then −2K, … down to the floor
+    assert abs(eps[0] - 0.99) < 1e-9
+    assert abs(eps[9] - 0.90) < 1e-9               # ε₀ − 10·K = 0.90
+    assert min(eps) == 0.1 and eps[-1] == 0.1      # floored at ε_min
+
+
 def test_sarsa_learns_to_escape():
     """Room 2 is a zig-zag corridor where ε-greedy alone never finds the idol —
     optimistic initialisation is what makes it learnable."""
     env = E.Room2DarkTemple(seed=0)
-    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=0.10, epsilon_decay=1.0,
+    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=0.10, epsilon_k=0.0,
                   episodes=3000, max_steps=400, optimistic_init=500.0,
                   seed=0).train(snapshots=3)
     ev = E.Room2DarkTemple(seed=1)
@@ -198,7 +250,7 @@ def test_cliff_resets_not_terminal_and_qlearning_hugs_cliff():
     s2, r, done = env.step(E.DOWN)                         # (9,1) -> (9,0) is the exit
     assert s2 == env.goal and r == E.GOAL_REWARD and done
     # learned greedy path avoids the cliff and reaches the goal
-    res = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_decay=0.999,
+    res = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.001,
                       episodes=800, max_steps=200, seed=0).train(snapshots=2)
     roll = A.rollout(env, res["final_policy"], max_steps=100)
     assert roll["success"]

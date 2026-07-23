@@ -57,19 +57,26 @@ class DPPolicy:
 
 
 class TabularPolicy:
-    """Greedy policy over a (snapshotted) tabular Q. Unseen states act randomly."""
+    """Greedy policy over a (snapshotted) tabular Q, restricted to each state's
+    VALID (non-wall) actions. Unseen states act randomly but legally."""
 
-    def __init__(self, Q, encode, n_actions, seed=0):
+    def __init__(self, Q, encode, n_actions, seed=0, valid_fn=None):
         self.Q = Q
         self.encode = encode
         self.n_actions = n_actions
+        self.valid_fn = valid_fn
         self.rng = np.random.default_rng(seed)
 
     def action(self, raw_state):
         s = self.encode(raw_state)
+        valid = self.valid_fn(raw_state) if self.valid_fn else list(range(self.n_actions))
         if s in self.Q:
-            return int(np.argmax(self.Q[s]))
-        return int(self.rng.integers(self.n_actions))
+            q = self.Q[s]
+            vals = np.array([q[a] for a in valid])
+            # random tie-break (deterministic argmax makes states dead-loop)
+            ties = [valid[i] for i in np.flatnonzero(vals == vals.max())]
+            return int(ties[0]) if len(ties) == 1 else int(self.rng.choice(ties))
+        return int(self.rng.choice(valid))
 
 
 class FAPolicy:
@@ -95,6 +102,11 @@ class ValueIteration:
         self.gamma = float(gamma)
         self.theta = float(theta)
         self.states = [s for s in env.states() if not env.is_terminal(s)]
+        self._valid = getattr(env, "valid_actions", None)
+
+    def acts(self, s):
+        """Only the legal (non-wall) actions of state s."""
+        return self._valid(s) if self._valid else self.actions
 
     def _q(self, s, a, V):
         return sum(p * (r + (0.0 if done else self.gamma * V[s2]))
@@ -107,16 +119,17 @@ class ValueIteration:
             delta = 0.0
             for s in self.states:
                 v_old = V[s]
-                V[s] = max(self._q(s, a, V) for a in self.actions)
+                V[s] = max(self._q(s, a, V) for a in self.acts(s))
                 delta = max(delta, abs(v_old - V[s]))
             deltas.append(delta)
             if progress:
                 progress(it + 1, max_iter)
             if delta < self.theta:
                 break
-        policy = {s: int(self.actions[int(np.argmax(
-                    [self._q(s, a, V) for a in self.actions]))])
-                  for s in self.states}
+        policy = {}
+        for s in self.states:
+            acts = self.acts(s)
+            policy[s] = int(acts[int(np.argmax([self._q(s, a, V) for a in acts]))])
         return dict(V=V, policy=policy, deltas=deltas,
                     iterations=len(deltas), final_policy=DPPolicy(policy))
 
@@ -126,18 +139,19 @@ class ValueIteration:
 # --------------------------------------------------------------------------- #
 class TDAgent:
     def __init__(self, env, alpha=0.1, gamma=0.99, epsilon=1.0,
-                 epsilon_decay=0.995, epsilon_min=0.01, episodes=2000,
+                 epsilon_k=0.0, epsilon_min=0.01, episodes=2000,
                  max_steps=300, optimistic_init=0.0, seed=None):
         self.env = env
         self.alpha = float(alpha)
         self.gamma = float(gamma)
         self.eps0 = float(epsilon)
-        self.eps_decay = float(epsilon_decay)
+        self.eps_k = float(epsilon_k)          # LINEAR decrement per episode
         self.eps_min = float(epsilon_min)
         self.episodes = int(episodes)
         self.max_steps = int(max_steps)
         self.n_actions = env.n_actions
         self.encode = getattr(env, "encode", lambda s: s)
+        self.valid = getattr(env, "valid_actions", None)   # action masking
         self.rng = np.random.default_rng(seed)
         # Optimistic initialisation: unseen state-actions look attractive, which
         # drives *systematic* exploration — essential in corridor mazes where
@@ -145,14 +159,30 @@ class TDAgent:
         self.q0 = float(optimistic_init)
         self.Q = defaultdict(lambda: np.full(self.n_actions, self.q0))
 
-    def _act(self, s, eps):
+    def valid_of(self, raw):
+        return self.valid(raw) if self.valid else list(range(self.n_actions))
+
+    def decay(self, eps):
+        return max(self.eps_min, eps - self.eps_k)          # ε = ε₀ − K·t
+
+    def _act(self, s, eps, valid):
+        """ε-greedy restricted to the state's legal (non-wall) actions."""
         if self.rng.random() < eps:
-            return int(self.rng.integers(self.n_actions))
-        return _argmax_random(self.Q[s], self.rng)
+            return int(valid[self.rng.integers(len(valid))])
+        q = self.Q[s]
+        if len(valid) == self.n_actions:            # fast path: nothing masked
+            return _argmax_random(q, self.rng)
+        best, ties = valid[0], [valid[0]]           # pure-Python argmax over ≤4 acts
+        for a in valid[1:]:
+            if q[a] > q[best]:
+                best, ties = a, [a]
+            elif q[a] == q[best]:
+                ties.append(a)
+        return int(ties[0]) if len(ties) == 1 else int(self.rng.choice(ties))
 
     def _snapshot(self):
         return TabularPolicy({s: q.copy() for s, q in self.Q.items()},
-                             self.encode, self.n_actions)
+                             self.encode, self.n_actions, valid_fn=self.valid)
 
 
 class Sarsa(TDAgent):
@@ -164,24 +194,25 @@ class Sarsa(TDAgent):
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
         for ep in range(self.episodes):
-            s = self.encode(self.env.reset())
-            a = self._act(s, eps)
+            raw = self.env.reset()
+            s, valid = self.encode(raw), self.valid_of(raw)
+            a = self._act(s, eps, valid)
             taping = ep in rec_at
             frames = [self.env.render_frame()] if taping else None
             acts, rews = ([], []) if taping else (None, None)
             done, total, steps = False, 0.0, 0
             while not done and steps < self.max_steps:
-                s2, r, done = self.env.step(a)
+                raw2, r, done = self.env.step(a)
                 if taping:
                     frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
-                s2 = self.encode(s2)
-                a2 = self._act(s2, eps)
+                s2, valid2 = self.encode(raw2), self.valid_of(raw2)
+                a2 = self._act(s2, eps, valid2)
                 target = r + (0.0 if done else self.gamma * self.Q[s2][a2])
                 self.Q[s][a] += self.alpha * (target - self.Q[s][a])
-                s, a = s2, a2
+                s, a, valid = s2, a2, valid2
                 total += r
                 steps += 1
-            eps = max(self.eps_min, eps * self.eps_decay)
+            eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
@@ -206,23 +237,25 @@ class QLearning(TDAgent):
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
         for ep in range(self.episodes):
-            s = self.encode(self.env.reset())
+            raw = self.env.reset()
+            s, valid = self.encode(raw), self.valid_of(raw)
             taping = ep in rec_at
             frames = [self.env.render_frame()] if taping else None
             acts, rews = ([], []) if taping else (None, None)
             done, total, steps = False, 0.0, 0
             while not done and steps < self.max_steps:
-                a = self._act(s, eps)
-                s2, r, done = self.env.step(a)
+                a = self._act(s, eps, valid)
+                raw2, r, done = self.env.step(a)
                 if taping:
                     frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
-                s2 = self.encode(s2)
-                target = r + (0.0 if done else self.gamma * self.Q[s2].max())
-                self.Q[s][a] += self.alpha * (target - self.Q[s][a])
-                s = s2
+                s2, valid2 = self.encode(raw2), self.valid_of(raw2)
+                # bootstrap over the LEGAL actions of s2 (off-policy greedy max)
+                nxt = 0.0 if done else max(self.Q[s2][aa] for aa in valid2)
+                self.Q[s][a] += self.alpha * (r + self.gamma * nxt - self.Q[s][a])
+                s, valid = s2, valid2
                 total += r
                 steps += 1
-            eps = max(self.eps_min, eps * self.eps_decay)
+            eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
@@ -273,7 +306,7 @@ class TileCoder:
 
 class LinearFAAgent:
     def __init__(self, env, alpha=0.5, gamma=0.99, epsilon=0.1,
-                 epsilon_decay=1.0, epsilon_min=0.0, episodes=2000,
+                 epsilon_k=0.0, epsilon_min=0.0, episodes=2000,
                  n_tilings=8, n_bins=8, optimistic_init=100.0,
                  max_steps=None, seed=None):
         self.env = env
@@ -285,7 +318,7 @@ class LinearFAAgent:
         self.alpha = float(alpha) / n_tilings                 # per-tiling step size
         self.gamma = float(gamma)
         self.eps0 = float(epsilon)
-        self.eps_decay = float(epsilon_decay)
+        self.eps_k = float(epsilon_k)          # LINEAR decrement per episode
         self.eps_min = float(epsilon_min)
         self.episodes = int(episodes)
         self.n_actions = env.n_actions
@@ -321,7 +354,7 @@ class LinearFAAgent:
                 feats = feats2
                 total += r
                 steps += 1
-            eps = max(self.eps_min, eps * self.eps_decay)
+            eps = max(self.eps_min, eps - self.eps_k)          # ε = ε₀ − K·t
             rewards.append(total); lengths.append(steps)
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
@@ -341,15 +374,16 @@ class LinearFAAgent:
 # Uniform greedy rollout (drives the Episode Replay tab for every room)
 # --------------------------------------------------------------------------- #
 def rollout(env, policy, max_steps=600):
-    """Run one greedy episode; return recorded frames + summary stats."""
+    """Run one greedy episode; return recorded frames + per-step log + stats."""
     s = env.reset()
     frames = [env.render_frame()]
+    acts, rews = [], []
     total, done, steps = 0.0, False, 0
     while not done and steps < max_steps:
         a = policy.action(s)
         s, r, done = env.step(a)
-        frames.append(env.render_frame())
+        frames.append(env.render_frame()); acts.append(int(a)); rews.append(r)
         total += r
         steps += 1
     return dict(frames=frames, reward=total, steps=steps,
-                success=env.is_success())
+                success=env.is_success(), actions=acts, step_rewards=rews)

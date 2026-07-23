@@ -122,6 +122,8 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
     hz_default = meta.get("hazard_reward", 0)
     hz_resets = meta.get("hazard_resets", False)
     button = meta.get("button")
+    button_bit = meta.get("button_bit")
+    button_r = meta.get("button_reward", 0)
     exit_r = meta.get("exit_reward", 100)
     start, goal = meta["start"], meta["goal"]
     fs = int(cell * 0.5)
@@ -131,6 +133,8 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
 
     key_cell = next((c for c, ch in pickups.items() if ch == "K"), None)
     has_key = key_cell is None or bool((mask >> bits[key_cell]) & 1)
+    button_pressed = button_bit is not None and bool((mask >> button_bit) & 1)
+    button_active = button is not None and has_key and not button_pressed
 
     def taken(c):                       # pickup already collected?
         return c in bits and bool((mask >> bits[c]) & 1)
@@ -146,7 +150,7 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
         if c in cliff:      return T["cliff_c"]
         if c == goal:       return T["goal_c"]
         if c in hazards:    return T.get("hazard_c", T["pit_c"])
-        if c == button and has_key:  return T.get("button_c", T["even"])
+        if c == button and button_active:  return T.get("button_c", T["even"])
         if c in pickups and not taken(c):
             return T.get("key_c") if pickups[c] == "K" else T.get("bonus_c")
         if c in ice:
@@ -167,8 +171,8 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
         if c in cliff:      return f"{T['cliff']}<span class='rlrw neg'>-100</span>"
         if c == goal:       return f"{T['goal']}<span class='rlrw pos'>+{exit_r:g}</span>"
         if c in hazards:    return f"{T.get('hazard','⚠️')}<span class='rlrw neg'>{hz_val(c):g}</span>"
-        if c == button and has_key:
-            return T.get("button", "🔘")
+        if c == button and button_active:
+            return f"{T.get('button', '🔘')}<span class='rlrw pos'>+{button_r:g}</span>"
         if c in pickups and not taken(c):
             ch = pickups[c]
             emo = T.get("key") if ch == "K" else T.get("bonus")
@@ -194,12 +198,12 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
             tail = " and back to the start" if hz_resets else ""
             return f"Hazard — {hz_val(c):g}{tail} (does NOT end the episode)"
         if chaser is not None and c == tuple(chaser):
-            return ("Boulder — retraces your own trail a few steps behind; "
-                    f"if it catches you: {meta.get('catch_reward', 0):g}, "
-                    "back to start and the temple resets")
-        if c == button and has_key:
-            return ("Pressure plate — stepping here wakes the boulder. "
-                    "It is a pure trap: the exit is already open once you hold the idol")
+            return ("Boulder — retraces your own trail; if it catches you: "
+                    f"{meta.get('catch_reward', 0):g} (once). You stay put and keep the "
+                    "idol & treasures; the boulder then vanishes — just head for the exit")
+        if c == button and button_active:
+            return (f"Pressure plate — press once for +{button_r:g}, then it's gone. "
+                    "Pressing it also wakes the boulder")
         if c in pickups and not taken(c):
             ch = pickups[c]
             what = ("Key — opens the gate" if ch == "K" else "Bonus pickup")
@@ -256,9 +260,10 @@ def render_legend(theme, meta):
                           + (" + back to start" if meta.get("hazard_resets") else "")),
         ]
         if meta.get("button"):
-            chips += [(T.get("button", "🔘"), "plate · wakes the chaser (trap!)"),
+            chips += [(T.get("button", "🔘"),
+                       f"plate · +{meta.get('button_reward', 0):g} once, wakes the boulder"),
                       (T.get("chaser", "🪨"),
-                       f"chaser · {meta.get('catch_reward', 0):g} + resets the room")]
+                       f"boulder · {meta.get('catch_reward', 0):g} once, then vanishes (keep all)")]
         chips += [
             (T["goal"], f"exit · +{meta.get('exit_reward', 100):g} (terminal)"),
             ("👣", "each step · 0"),
