@@ -227,6 +227,29 @@ def test_linear_epsilon_decay():
     assert min(eps) == 0.1 and eps[-1] == 0.1      # floored at ε_min
 
 
+def test_room2_sokoban_push_button_and_gate():
+    env = E.Room2CloningLab(seed=0)
+    env.reset()
+    # push box2 (7,0) right onto its neighbour, then onto the plate (9,0)
+    env._boxes = set(env.box_start)
+    env._state = (6, 0, tuple(sorted(env._boxes)), 0, (False, False))
+    s, r, _ = env.step(E.RIGHT)                       # box (7,0)->(8,0), agent stays
+    assert (s[0], s[1]) == (6, 0) and (8, 0) in s[2] and r == env.STEP_REWARD
+    env._state = (7, 0, tuple(sorted(env._boxes)), 0, (False, False))
+    s, r, _ = env.step(E.RIGHT)                       # box (8,0)->(9,0) plate
+    assert (9, 0) in s[2] and r == env.STEP_REWARD + env.BUTTON_REWARD
+    s, r, _ = env.step(E.RIGHT)                       # plate box is locked → no farm
+    assert r == env.STEP_REWARD
+    # gate opens only when BOTH plates are covered
+    env.reset()
+    assert not env.door_open(set([env.buttons[0]]))
+    assert env.door_open(set(env.buttons))
+    # a move into a wall/border is masked out of the action space
+    va = env.valid_actions((env.start[0], env.start[1], tuple(sorted(env.box_start)),
+                            0, (False, False)))
+    assert E.DOWN not in va                            # start is on the bottom border
+
+
 def test_qlearning_solves_the_boulder_temple():
     """Room 3 (Dark Temple) uses off-policy Q-Learning + a decaying-from-high ε.
     That combination reliably solves the sparse, high-reward maze (SARSA does

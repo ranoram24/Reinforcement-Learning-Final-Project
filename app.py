@@ -42,9 +42,9 @@ ROOMS = {
                        "so Hezki plans the perfect escape with a full model of the world."),
     "room2": dict(label="Cloning Lab", emoji="🕶️", stars=2, kind="grid",
                   movie="The Matrix (1999)", algo="SARSA (on-policy TD)",
-                  plot="Agent J clones himself like Agent Smith. On-policy SARSA plays it "
-                       "safe — it learns a cautious path that keeps its distance from the "
-                       "cliff of clones."),
+                  plot="A cloning-lab puzzle: Hezki must push the two 📦 boxes onto the two "
+                       "pressure plates 🔘 to open the ice-gate 🔒, then reach the exit. "
+                       "The reset tile 🔄 undoes a dead-lock; 💊 bonuses pay once."),
     "room3": dict(label="Dark Temple", emoji="🏛️", stars=3, kind="grid",
                   movie="Raiders of the Lost Ark (1981)", algo="Q-Learning (off-policy TD)",
                   plot="Hezki falls into an ancient temple. Off-policy Q-Learning is "
@@ -84,6 +84,60 @@ def eps_note(e0, k, emin, episodes):
             f"floor after **~{n} episodes** ({pct:.0f}% of the {episodes}-episode run).")
 
 
+def _randomize_hp(key):
+    """Write a random-but-sane value into every hyperparameter widget of `key`.
+    Called before the widgets are built, so session_state feeds their defaults.
+    Bounds stay inside each widget's (min,max) and snap to its step."""
+    import random as _r
+    ss = st.session_state
+
+    def flt(lo, hi, step):           # random float in [lo,hi], snapped to `step`
+        v = round(round(_r.uniform(lo, hi) / step) * step, 6)
+        return float(min(hi, max(lo, v)))
+
+    def integer(lo, hi, step):       # random int in [lo,hi], multiple of `step`
+        v = int(round(_r.uniform(lo, hi) / step) * step)
+        return int(min(hi, max(lo, v)))
+
+    if key == "room1":
+        ss["g1"] = flt(0.80, 0.999, 0.001)
+        ss["t1"] = _r.choice([1e-3, 1e-4, 1e-5, 1e-6])
+    elif key in ("room2", "room3"):
+        ss[f"a{key}"] = flt(0.05, 0.80, 0.01)
+        ss[f"g{key}"] = flt(0.85, 0.999, 0.001)
+        ss[f"e{key}"] = flt(0.50, 1.00, 0.01)
+        ss[f"ed{key}"] = flt(0.0001, 0.0010, 0.0001)
+        ss[f"em{key}"] = flt(0.00, 0.10, 0.01)
+        ss[f"oi{key}"] = flt(0.0, 2000.0, 50.0)
+        ss[f"ep{key}"] = integer(2000, 8000, 100)
+        ss[f"ms{key}"] = integer(300, 800, 1)
+    elif key == "room4":
+        ss["a4"] = flt(0.15, 0.80, 0.05)
+        ss["g4"] = flt(0.90, 0.999, 0.001)
+        ss["e4"] = flt(0.10, 0.40, 0.01)
+        ss["ed4"] = flt(0.0000, 0.0020, 0.0001)
+        ss["ep4"] = integer(1500, 4000, 100)
+        ss["oi4"] = flt(50.0, 200.0, 10.0)
+        ss["nt4"] = integer(6, 12, 1)
+        ss["nb4"] = integer(6, 10, 1)
+        ss["vm4"] = flt(2.0, 4.0, 0.5)
+        ss["ms4"] = integer(500, 1000, 1)
+        ss["sh4"] = True                       # shaping on — the room rarely solves without it
+        ss["sc4"] = flt(3.0, 8.0, 0.5)
+        ss["hw4"] = False
+    else:  # room5
+        ss["v5"] = flt(2.0, 5.0, 0.5)
+        ss["sp5"] = integer(8, 30, 1)
+        ss["a5"] = flt(0.05, 0.40, 0.01)
+        ss["g5"] = flt(0.90, 0.999, 0.001)
+        ss["e5"] = flt(0.60, 1.00, 0.01)
+        ss["ed5"] = flt(0.0002, 0.0010, 0.0001)
+        ss["em5"] = flt(0.00, 0.10, 0.01)
+        ss["ep5"] = integer(2000, 6000, 100)
+        ss["vm5"] = flt(4.0, 6.0, 0.5)
+        ss["ms5"] = integer(400, 800, 1)
+
+
 # --------------------------------------------------------------------------- #
 # Sidebar — room selector + ALL hyperparameters + train/reset
 # --------------------------------------------------------------------------- #
@@ -101,26 +155,32 @@ def sidebar():
     st.sidebar.divider()
 
     st.sidebar.subheader("⚙️ Hyperparameters")
+    # A pending "🎲 Randomize" click writes fresh values into the widget keys BEFORE
+    # the widgets below are instantiated (Streamlit forbids editing a widget's state
+    # after it exists in the same run), so the sliders pick the new values up.
+    if st.session_state.pop("_randhp", None) == key:
+        _randomize_hp(key)
     p = {}
     if key == "room1":
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g1")
         p["theta"] = st.sidebar.number_input("θ  convergence threshold", 1e-6, 1e-1,
                                              1e-4, format="%.6f", key="t1")
     elif key in ("room2", "room3"):
-        # Room 2 = Cliff Walking + SARSA ; Room 3 = Dark Temple boulder + Q-Learning.
+        # Room 2 = Cloning-Lab Sokoban + SARSA ; Room 3 = Dark Temple boulder + Q-Learning.
         boulder = (key == "room3")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key=f"a{key}")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key=f"g{key}")
         p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key=f"e{key}")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
-                                           0.0, 0.05, 0.0002 if boulder else 0.0010, 0.0001,
+                                           0.0, 0.05, 0.0002 if boulder else 0.0003, 0.0001,
                                            format="%.4f", key=f"ed{key}")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.50, 0.01, 0.01, key=f"em{key}")
         p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 3000.0,
                                                  0.0, 50.0, key=f"oi{key}")
         p["episodes"] = st.sidebar.number_input("episodes", 100, 40000,
-                                                4000 if boulder else 1000, 100, key=f"ep{key}")
-        p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000, 400, 1, key=f"ms{key}")
+                                                4000 if boulder else 6000, 100, key=f"ep{key}")
+        p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000,
+                                                 400 if boulder else 500, 1, key=f"ms{key}")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"],
                                     p["epsilon_min"], p["episodes"]))
         if boulder:
@@ -128,8 +188,9 @@ def sidebar():
                                "idol +100000 opens the gate, plate +10000 (once, wakes the "
                                "boulder), catch −100000 (kept everything), exit +200000.")
         else:
-            st.sidebar.caption("On-policy SARSA learns the SAFE path away from the cliff "
-                               "(step −1, cliff −100 + back to start, exit +100).")
+            st.sidebar.caption("On-policy SARSA. Push both 📦 onto the plates 🔘 (+500000 each) "
+                               "to open the gate, then reach the exit (+1000000). Step −1; "
+                               "💊 bonuses +100000 (one-off).")
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
@@ -164,6 +225,10 @@ def sidebar():
             p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 5.0, 0.5, key="vm5")
             p["max_steps"] = st.number_input("max steps (survival cap)", 0, 3000, 500, 1, key="ms5")
 
+    if st.sidebar.button("🎲 Randomize hyperparameters", use_container_width=True):
+        st.session_state["_randhp"] = key
+        st.rerun()
+
     st.sidebar.divider()
     train_clicked = st.sidebar.button("🚀 Train (resets this room)",
                                       use_container_width=True, type="primary")
@@ -182,8 +247,8 @@ def sidebar():
 def build_env(key, p, seed=None):
     if key == "room1":
         return E.Room1FrozenArchive(seed=seed)
-    if key == "room2":                       # Room 2 = Cliff Walking (SARSA)
-        return E.Room3CloningLab(seed=seed)
+    if key == "room2":                       # Room 2 = Cloning Lab (Sokoban, SARSA)
+        return E.Room2CloningLab(seed=seed)
     if key == "room3":                       # Room 3 = Dark Temple boulder (Q-Learning)
         return E.Room2DarkTemple(seed=seed)
     if key == "room4":
@@ -242,8 +307,11 @@ def train(key, p):
 # Rendering helpers
 # --------------------------------------------------------------------------- #
 def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
-               trail=None, fill=False, mask=0, chaser=None):
+               trail=None, fill=False, mask=0, chaser=None, boxes=None, door_open=False):
     theme = U.ROOM_THEME[key]
+    if meta.get("kind") == "sokoban":
+        return U.render_sokoban_html(meta, theme, agent=agent, boxes=boxes,
+                                     door_open=door_open, mask=mask, fill=fill)
     if ROOMS[key]["kind"] in ("dp", "grid"):
         return U.render_grid_html(meta, theme, agent=agent, policy=policy,
                                   fill=fill, mask=mask, chaser=chaser)
@@ -296,8 +364,9 @@ def render_frames(key, entry, roll, cap=320):
         step = (len(frames) - 1) / (cap - 1)
         frames = [frames[int(round(i * step))] for i in range(cap)]
     return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"),
-                       vision=vision, mask=f.get("mask", 0),
-                       chaser=f.get("chaser")) for f in frames]
+                       vision=vision, mask=f.get("mask", 0), chaser=f.get("chaser"),
+                       boxes=f.get("boxes"), door_open=f.get("door_open", False))
+            for f in frames]
 
 
 def replay_eval(key, entry, tag, policy):
@@ -368,13 +437,14 @@ def tab_charts(key, entry):
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))
         if n:
-            m1, m2 = st.columns(2)
+            m1, m2, m3 = st.columns(3)
             m1.metric("🏆 Episodes escaped", f"{total:,}")
             m2.metric("❌ Episodes not escaped", f"{n - total:,}")
+            m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"]), use_container_width=True)
         c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
-        if key == "room2":                       # cliff room → learned-path plot
+        if key == "room2" and entry["meta"].get("cliff"):   # cliff room → learned-path plot
             roll = eval_roll(key, entry, entry["final_policy"], seed=1)
             path = [f["agent"] for f in roll["frames"]]
             st.plotly_chart(U.path_compare(entry["meta"], path), use_container_width=True)
@@ -463,6 +533,77 @@ def step_notes(entry, ep):
     return notes
 
 
+def sokoban_notes(entry, ep):
+    """One line per frame for the Cloning-Lab replay: the move Hezki chose, what
+    happened (pushed a box, hit a plate, grabbed a bonus, opened the gate…), and
+    the reward — mirroring the step-by-step narration the grid rooms show."""
+    meta = entry["meta"]
+    walls = meta.get("walls", set())
+    buttons = set(meta.get("buttons", ()))
+    size = meta.get("size", 10)
+    br, bor = meta.get("button_reward", 0), meta.get("bonus_reward", 0)
+    gamma = float(entry["params"].get("gamma", 1.0))
+    frames = ep["frames"]
+    acts = ep.get("actions") or []
+    rews = ep.get("step_rewards") or []
+    notes = ["▶ start of episode  ·  discounted reward 0  ·  total reward 0"]
+    cum = disc = 0.0
+    for i in range(1, len(frames)):
+        prev, cur = frames[i - 1], frames[i]
+        a = acts[i - 1] if i - 1 < len(acts) else None
+        r = float(rews[i - 1]) if i - 1 < len(rews) else 0.0
+        cum += r
+        disc += (gamma ** (i - 1)) * r
+        arrow = E.ACTION_ARROWS.get(a, "") if a is not None else ""
+        name = E.ACTION_NAMES.get(a, "?") if a is not None else "?"
+        pa, ca = tuple(prev["agent"]), tuple(cur["agent"])
+        pbx = {tuple(b) for b in prev.get("boxes", [])}
+        cbx = {tuple(b) for b in cur.get("boxes", [])}
+        ev = []
+        if pbx != cbx:                                   # a box slid one cell
+            landed = cbx - pbx
+            if landed & buttons:
+                ev.append(f"pushed 📦 onto a plate (+{br:g})")
+            else:
+                ev.append("pushed 📦 one cell")
+        if int(cur.get("mask", 0)) & ~int(prev.get("mask", 0)):
+            ev.append(f"grabbed a 💊 bonus (+{bor:g})")
+        if cur.get("door_open") and not prev.get("door_open"):
+            ev.append("both plates covered — the ice-gate opens 🔓")
+        if ca == pa and pbx == cbx and a is not None:    # Hezki did not move
+            dx, dy = E._DELTA[a]
+            tgt = (pa[0] + dx, pa[1] + dy)
+            if tgt in pbx:
+                ev.append("shoved a stuck 📦 — it wouldn't budge")
+            elif tgt in walls or not (0 <= tgt[0] < size and 0 <= tgt[1] < size):
+                ev.append("blocked by a wall")
+            else:
+                ev.append("slipped on ice → stayed put")
+        if i == len(frames) - 1 and ep.get("success"):
+            ev.append("reached the EXIT 🎉")
+        notes.append(f"step {i}  {arrow} {name}  ·  "
+                     f"{', '.join(ev) if ev else 'moved'}  ·  reward {r:+.0f}  ·  "
+                     f"discounted reward {disc:+.0f}  ·  total reward {cum:+.0f}")
+    return notes
+
+
+def sokoban_player(key, entry, ep, cap=320):
+    """Full-frame replay (boxes move, so cells can't just be swapped) WITH the
+    per-step action narration shown beneath the board."""
+    meta = entry["meta"]
+    frames = ep["frames"]
+    notes = sokoban_notes(entry, ep)
+    idxs = list(range(len(frames)))
+    if len(frames) > cap:                                # keep payload light
+        step = (len(frames) - 1) / (cap - 1)
+        idxs = [int(round(i * step)) for i in range(cap)]
+    html = [board_html(key, meta, agent=frames[j]["agent"], mask=frames[j].get("mask", 0),
+                       boxes=frames[j].get("boxes"), door_open=frames[j].get("door_open", False))
+            for j in idxs]
+    return U.render_player(html, delay_ms=110, caption=f"episode #{ep['episode']}",
+                           notes=[notes[j] for j in idxs])
+
+
 def grid_player(key, entry, ep, token):
     """Exact, step-by-step replay for the grid rooms (no down-sampling)."""
     theme, meta = U.ROOM_THEME[key], entry["meta"]
@@ -524,10 +665,13 @@ def tab_replay(key, entry, random_clicked):
                f"{ep['steps']} steps · {'escaped ✅' if ep['success'] else 'did not escape ❌'}")
     # token changes with the selection, so the player remounts and restarts
     token = f"{key}-{idx}-{ep['episode']}"
-    if is_grid:
+    sokoban = entry["meta"].get("kind") == "sokoban"      # boxes move → full-frame player
+    if is_grid and not sokoban:
         embed(grid_player(key, entry, ep, token), height=board_h)
+    elif sokoban:
+        embed(sokoban_player(key, entry, ep), height=board_h + 40)
     else:
-        embed(U.render_player(render_frames(key, entry, ep), delay_ms=70,
+        embed(U.render_player(render_frames(key, entry, ep), delay_ms=110,
                               caption=f"episode #{ep['episode']}"), height=board_h)
 
 

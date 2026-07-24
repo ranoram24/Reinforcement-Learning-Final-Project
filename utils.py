@@ -54,10 +54,12 @@ THEMES = {
         movie="The Matrix", board="radial-gradient(circle at 50% 0%, #012a12, #000600 72%)",
         frame="#22c55e", accent="#00ff41",
         even="#02180c", odd="#010f07", start_c="#043016",
-        wall_c="#065f46", pit_c="#7f1d1d", cliff_c="#0b3d1e", goal_c="#064e2b",
+        wall_c="#065f46", pit_c="#7f1d1d", cliff_c="#0b3d1e", goal_c="#0a5c2f",
+        door_c="#064e2b", button_c="#0f766e", bonus_c="#4a1d5f", reset_c="#3f3f46",
         slip_a="#022c14", slip_b="#043a1b",
         agent="🐕", wall="🟩", slip="🟩", slip_name="code", pit="🕳️", cliff="🕶️",
-        goal="☎️", start="🐾"),
+        goal="🚪", start="🐾",
+        box="📦", plate="🔘", door="🔒", exit="🚪", reset="🔄", bonus="💊"),
     "garage": dict(  # The Fast and the Furious
         movie="The Fast and the Furious", board="#0a0a12", grid="#241b2e",
         accent="#ec4899", car="🚗", agent="🏎️", exit="🏁"),
@@ -235,6 +237,87 @@ def render_grid_html(meta, theme, agent=None, policy=None, cell=44, fill=False,
             f"<div style='padding:8px;display:flex;justify-content:center'>{board}</div>")
 
 
+def render_sokoban_html(meta, theme, agent=None, boxes=None, door_open=False,
+                        mask=0, cell=44, fill=False):
+    """Box-pushing room — dynamic boxes, plates (covered/empty), an open/shut
+    gate, one-off bonuses (hidden once taken), reset tile and the exit."""
+    T = THEMES[theme]
+    size, walls, ice = meta["size"], meta["walls"], meta["slippery"]
+    doors, exit_c, start = meta["doors"], meta["goal"], meta["start"]
+    buttons = set(meta["buttons"])
+    bonus_bit, reset_tile = meta["bonus_bit"], meta["reset_tile"]
+    btn_r, bon_r, exit_r = meta["button_reward"], meta["bonus_reward"], meta["exit_reward"]
+    boxes = set(boxes) if boxes is not None else set(meta["box_start"])
+    fs = int(cell * 0.5)
+
+    def collected(c):  return c in bonus_bit and bool((mask >> bonus_bit[c]) & 1)
+    def gate_shut(c):  return c in doors and not door_open
+
+    def bg(x, y):
+        c = (x, y)
+        if c in walls:                   return T["wall_c"]
+        if gate_shut(c):                 return T["door_c"]
+        if c in buttons:                 return T["button_c"]
+        if c == exit_c:                  return T["goal_c"]
+        if c == reset_tile:              return T["reset_c"]
+        if c in bonus_bit and not collected(c):  return T["bonus_c"]
+        if c in ice:
+            return (f"repeating-linear-gradient(45deg,{T['slip_a']},{T['slip_a']} 5px,"
+                    f"{T['slip_b']} 5px,{T['slip_b']} 10px)")
+        if c == start:                   return T["start_c"]
+        return T["even"] if (x + y) % 2 else T["odd"]
+
+    def content(x, y):
+        c = (x, y)
+        if agent is not None and c == tuple(agent):
+            return f"<span style='filter:drop-shadow(0 0 6px {T['accent']})'>{T['agent']}</span>"
+        if c in boxes:
+            glow = T["accent"] if c in buttons else "transparent"
+            return f"<span style='filter:drop-shadow(0 0 6px {glow})'>{T['box']}</span>"
+        if c in walls:                   return T["wall"]
+        if gate_shut(c):                 return T["door"]
+        if c == exit_c:                  return f"{T['exit']}<span class='rlrw pos'>+{exit_r:g}</span>"
+        if c in buttons:                 return f"{T['plate']}<span class='rlrw pos'>+{btn_r:g}</span>"
+        if c == reset_tile:              return T["reset"]
+        if c in bonus_bit and not collected(c):
+            return f"{T['bonus']}<span class='rlrw pos'>+{bon_r:g}</span>"
+        if c in ice:                     return T["slip"]
+        if c == start:                   return f"<span class='rlst'>{T['start']}</span>"
+        return ""
+
+    def tip(x, y):
+        c = (x, y)
+        if c in boxes:      return "Box — push it onto a plate; a box on a plate is locked"
+        if c in walls:      return "Wall — impassable"
+        if gate_shut(c):    return "Ice-gate — opens only when BOTH plates hold a box"
+        if c in doors:      return "Ice-gate — OPEN (both plates covered)"
+        if c == exit_c:     return f"Exit — +{exit_r:g}, ends the episode"
+        if c in buttons:    return f"Pressure plate — +{btn_r:g} the first time a box lands here"
+        if c == reset_tile: return "Reset tile — returns all positions to start (keeps bonuses/plates)"
+        if c in bonus_bit:  return f"Bonus — +{bon_r:g} (one-off)"
+        if c in ice:        return _slip_tip(ice.get(c))
+        return None
+
+    def tip_attr(x, y):
+        t = tip(x, y)
+        return f'title="{t}" ' if t else ""
+
+    rows = []
+    for y in range(size - 1, -1, -1):
+        tds = "".join(
+            f"<td {tip_attr(x, y)}style='width:{cell}px;height:{cell}px;"
+            f"background:{bg(x, y)};font-size:{fs}px'>{content(x, y)}</td>"
+            for x in range(size))
+        rows.append(f"<tr>{tds}</tr>")
+    board = f"<table class='rlb' style='border:2px solid {T['frame']}'>{''.join(rows)}</table>"
+    if fill:
+        return (_GRID_CSS + f"<div style='min-height:100vh;box-sizing:border-box;padding:12px;"
+                f"background:{T['board']};display:flex;align-items:center;justify-content:center'>"
+                f"{board}</div>")
+    return (_GRID_CSS + f"<style>body{{background:{T['board']}}}</style>"
+            f"<div style='padding:8px;display:flex;justify-content:center'>{board}</div>")
+
+
 def render_legend(theme, meta):
     T = THEMES[theme]
     chips = [(T["agent"], "Hezki")]
@@ -244,6 +327,21 @@ def render_legend(theme, meta):
         else:
             chips += [(T["drone"], "drone · hit −1000"), ("👁️", "vision (sensor)"),
                       ("✅", "survive · +1 / step")]
+    elif meta.get("kind") == "sokoban":                     # box-pushing room
+        chips += [
+            (T["box"], "box · push onto a plate"),
+            (T["plate"], f"plate · +{meta.get('button_reward', 0):g} once a box lands"),
+            (T["door"], "ice-gate · opens when both plates covered"),
+            (T["bonus"], f"bonus · +{meta.get('bonus_reward', 0):g} (one-off)"),
+        ]
+        if meta.get("reset_tile"):
+            chips.append((T["reset"], "reset · positions back to start"))
+        chips += [
+            (T["wall"], "wall"),
+            (T["slip"], "slippery (per-action)"),
+            (T["exit"], f"exit · +{meta.get('exit_reward', 0):g}"),
+            ("👣", "each step · −1"),
+        ]
     elif meta.get("kind") == "keydoor":                     # key-and-door rooms
         prew = meta.get("pickup_rewards", {})
         hz = meta.get("hazards", {})
@@ -427,15 +525,21 @@ def render_player_grid(boards, frames, agent, chaser, accent, board_bg,
 </script>"""
 
 
-def render_player(frames, delay_ms=90, autoplay=True, caption=""):
+def render_player(frames, delay_ms=90, autoplay=True, caption="", notes=None):
     data = json.dumps(frames)
+    ndata = json.dumps(notes or [])
     auto = "true" if autoplay else "false"
     cap = (f"<div style='color:#94a3b8;font-size:13px;margin-bottom:4px'>{caption}</div>"
            if caption else "")
+    note_div = ("<div id='note' style='margin-top:8px;font-size:13px;color:#e2e8f0;"
+                "background:rgba(15,23,42,.75);border:1px solid #334155;border-radius:8px;"
+                "padding:7px 12px;display:inline-block;font-family:ui-monospace,Consolas,"
+                "monospace;min-height:18px'></div>" if notes else "")
     return f"""
 <div style="font-family:system-ui,Segoe UI,sans-serif;text-align:center;color:#e2e8f0">
   {cap}
   <div id="stage"></div>
+  {note_div}
   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap">
     <button id="pp" style="padding:6px 14px;border-radius:8px;border:1px solid #334155;
       background:#1e293b;color:#e2e8f0;cursor:pointer;font-size:14px">⏸ Pause</button>
@@ -446,12 +550,13 @@ def render_player(frames, delay_ms=90, autoplay=True, caption=""):
   </div>
 </div>
 <script>
-  const F = {data};
+  const F = {data}, N = {ndata};
   let i = 0, playing = {auto}, delay = {delay_ms}, timer = null;
   const stage=document.getElementById('stage'), sl=document.getElementById('sl'),
         lbl=document.getElementById('lbl'), pp=document.getElementById('pp'),
-        sp=document.getElementById('sp');
-  function show(k){{ i=k; stage.innerHTML=F[k]; sl.value=k; lbl.textContent=k+'/'+(F.length-1); }}
+        sp=document.getElementById('sp'), note=document.getElementById('note');
+  function show(k){{ i=k; stage.innerHTML=F[k]; sl.value=k; lbl.textContent=k+'/'+(F.length-1);
+    if(note) note.textContent=(N&&N[k])?N[k]:''; }}
   function tick(){{ if(i>=F.length-1){{ playing=false; pp.textContent='▶ Play'; return; }} show(i+1); }}
   function loop(){{ if(timer) clearInterval(timer); timer=setInterval(()=>{{ if(playing) tick(); }}, delay); }}
   pp.onclick=()=>{{ if(i>=F.length-1) show(0); playing=!playing; pp.textContent=playing?'⏸ Pause':'▶ Play'; }};

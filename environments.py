@@ -648,6 +648,206 @@ class Room3CloningLab(GridWorld):
 
 
 # --------------------------------------------------------------------------- #
+# Room 2 — The Cloning Lab (The Matrix) — SARSA — SOKOBAN box puzzle
+# --------------------------------------------------------------------------- #
+class Room2CloningLab:
+    """Push the two boxes onto the two pressure plates; that opens the ice-gate,
+    then reach the exit.
+
+    Mechanics
+    ---------
+    * step −1; each plate pays +500000 the FIRST time a box lands on it; the
+      exit pays +1000000 (terminal). One-off bonus tiles pay +100000 each.
+    * **Pushing**: moving into a box slides it one cell IF the cell beyond is
+      free (no wall/border/box); the agent then STAYS put. A box already on a
+      plate is locked and cannot be pushed.
+    * **Door** at the top-left is a wall until BOTH plates hold a box; then it
+      opens and the exit is reachable through it.
+    * **Reset tile**: stepping on it returns every position (agent + boxes) to
+      the start — a way out of a dead-lock — but does NOT reset the collected
+      bonuses / already-paid plates (so nothing can be farmed), nor the steps.
+    * Per-tile / per-action slip, and action masking (no wall/border moves).
+
+    The ENVIRONMENT tracks the full state (agent, boxes, bonus mask, paid
+    plates).  The AGENT only OBSERVES (agent, box positions) — the door and
+    plate coverage are derivable from the box positions — which keeps the
+    tabular state space to a few thousand.
+    """
+
+    NAME = "Room 2 · The Cloning Lab"
+    MOVIE = "The Matrix (1999)"
+    ALGO = "SARSA (on-policy TD control)"
+    SIZE = 10
+    STEP_REWARD = -1.0
+    EXIT_REWARD = 1000000.0
+    BUTTON_REWARD = 500000.0
+    BONUS_REWARD = 100000.0
+
+    # row 0 = top.  '.' blank  '#' wall  '~' slippery  'S' start  'E' exit
+    # 'D' door  'B' plate/button  'X' box  'G' bonus (+100000, one-off)  'R' reset
+    LAYOUT = [
+        "ED........",
+        "#.........",
+        ".....####.",
+        "~~~..#B...",
+        "#~#..#.X.#",
+        "GGG#.#...#",
+        "GGG#.##..#",
+        "GG#......#",
+        "##..######",
+        "S......X.B",
+    ]
+    SLIP = {
+        (0, 3): {RIGHT: [(0.30, RIGHT), (0.70, UP)]},
+        (1, 3): {DOWN:  [(0.40, DOWN),  (0.60, RIGHT)]},
+        (2, 3): {LEFT:  [(0.40, LEFT),  (0.60, UP)]},
+        (1, 4): {DOWN:  [(0.40, DOWN),  (0.60, UP)]},
+    }
+
+    def __init__(self, seed=None):
+        self.size = self.SIZE
+        self.actions = GRID_ACTIONS
+        self.n_actions = 4
+        self.rng = np.random.default_rng(seed)
+        self._va_cache = {}
+
+        self.walls, self.doors, self.slippery, self.bonus_at = set(), set(), {}, {}
+        self.buttons, self.box_start = [], []
+        self.start = self.exit = self.reset_tile = None
+        ice = set()
+        for row, line in enumerate(self.LAYOUT):
+            y = self.SIZE - 1 - row
+            for x, ch in enumerate(line):
+                c = (x, y)
+                if ch == "#":   self.walls.add(c)
+                elif ch == "D": self.doors.add(c)
+                elif ch == "E": self.exit = c
+                elif ch == "S": self.start = c
+                elif ch == "R": self.reset_tile = c
+                elif ch == "B": self.buttons.append(c)
+                elif ch == "X": self.box_start.append(c)
+                elif ch == "G": self.bonus_at[c] = None
+                elif ch == "~": ice.add(c)
+        for (cx, cr), rules in self.SLIP.items():
+            self.slippery[(cx, self.SIZE - 1 - cr)] = rules
+        if ice != set(self.slippery):
+            raise ValueError("Room 2 layout/SLIP mismatch — "
+                             f"LAYOUT only: {sorted(ice - set(self.slippery))}; "
+                             f"SLIP only: {sorted(set(self.slippery) - ice)}")
+        self.bonus_order = sorted(self.bonus_at)
+        self.bonus_bit = {c: i for i, c in enumerate(self.bonus_order)}
+        self.n_bonus = len(self.bonus_order)
+        self.buttons = tuple(sorted(self.buttons))
+        self.box_start = tuple(sorted(self.box_start))
+        self.reset()
+
+    # ---- helpers ---------------------------------------------------------- #
+    def in_bounds(self, c):
+        return 0 <= c[0] < self.SIZE and 0 <= c[1] < self.SIZE
+
+    def door_open(self, boxes):
+        return all(b in boxes for b in self.buttons)
+
+    def _box_blocked(self, c, boxes):
+        """Can a box occupy cell c?  (walls, borders, doors, exit, reset, boxes)"""
+        return (not self.in_bounds(c) or c in self.walls or c in self.doors
+                or c == self.exit or c == self.reset_tile or c in boxes)
+
+    def reseed(self, seed):
+        self.rng = np.random.default_rng(seed)
+
+    def valid_actions(self, s):
+        """Action masking — no moves into a wall/border/closed gate.  (Moving
+        into a box is allowed: it's a push attempt.)"""
+        ax, ay, boxes = s[0], s[1], s[2]
+        dopen = self.door_open(boxes)
+        k = (ax, ay, dopen)
+        va = self._va_cache.get(k)
+        if va is None:
+            va = []
+            for a in self.actions:
+                c = (ax + _DELTA[a][0], ay + _DELTA[a][1])
+                if not self.in_bounds(c) or c in self.walls:
+                    continue
+                if c in self.doors and not dopen:
+                    continue
+                va.append(a)
+            va = va or list(self.actions)
+            self._va_cache[k] = va
+        return va
+
+    def encode(self, s):
+        """Agent observation: position + box configuration (door derivable)."""
+        return (s[0], s[1], s[2])
+
+    # ---- model-free interface --------------------------------------------- #
+    def reset(self):
+        self._boxes = set(self.box_start)
+        self._mask = 0
+        self._paid = [False] * len(self.buttons)
+        self._state = (self.start[0], self.start[1], tuple(sorted(self._boxes)),
+                       self._mask, tuple(self._paid))
+        return self._state
+
+    def step(self, a):
+        ax, ay = self._state[0], self._state[1]
+        boxes, mask, paid = set(self._boxes), self._mask, list(self._paid)
+        dopen = self.door_open(boxes)
+
+        # per-action slip → sample the ACTUAL direction
+        cands = self.slippery.get((ax, ay), {}).get(a, [(1.0, a)])
+        dirs = [d for _, d in cands]
+        direction = dirs[int(self.rng.choice(len(dirs), p=[p for p, _ in cands]))]
+        dx, dy = _DELTA[direction]
+        nxt = (ax + dx, ay + dy)
+
+        r, done, agent = self.STEP_REWARD, False, (ax, ay)
+        blocked_wall = (not self.in_bounds(nxt) or nxt in self.walls
+                        or (nxt in self.doors and not dopen))
+        if blocked_wall:
+            pass                                             # stay in place
+        elif nxt in boxes:                                   # push attempt
+            behind = (nxt[0] + dx, nxt[1] + dy)
+            if nxt not in self.buttons and not self._box_blocked(behind, boxes):
+                boxes.discard(nxt); boxes.add(behind)        # box slides, agent stays
+                for i, btn in enumerate(self.buttons):
+                    if behind == btn and not paid[i]:
+                        r += self.BUTTON_REWARD; paid[i] = True
+        else:                                                # free move
+            agent = nxt
+            if nxt in self.bonus_at:                         # one-off bonus
+                i = self.bonus_bit[nxt]
+                if not (mask >> i) & 1:
+                    r += self.BONUS_REWARD; mask |= 1 << i
+            if nxt == self.reset_tile:                       # dead-lock escape
+                agent = self.start
+                boxes = set(self.box_start)                  # positions only; keep mask/paid
+            elif nxt == self.exit:
+                r += self.EXIT_REWARD; done = True
+
+        self._boxes, self._mask, self._paid = boxes, mask, paid
+        self._state = (agent[0], agent[1], tuple(sorted(boxes)), mask, tuple(paid))
+        return self._state, r, done
+
+    def is_success(self):
+        return (self._state[0], self._state[1]) == self.exit
+
+    def render_frame(self):
+        return {"agent": (self._state[0], self._state[1]),
+                "boxes": list(self._boxes), "mask": self._mask,
+                "door_open": self.door_open(self._boxes)}
+
+    def render_meta(self):
+        return dict(kind="sokoban", size=self.SIZE, start=self.start, goal=self.exit,
+                    walls=self.walls, doors=self.doors, slippery=self.slippery,
+                    buttons=self.buttons, box_start=self.box_start,
+                    bonuses=self.bonus_at, bonus_bit=self.bonus_bit,
+                    reset_tile=self.reset_tile, button_reward=self.BUTTON_REWARD,
+                    bonus_reward=self.BONUS_REWARD, exit_reward=self.EXIT_REWARD,
+                    traps=set(), cliff=set())
+
+
+# --------------------------------------------------------------------------- #
 # Room 4 — The Hovercar Garage (Fast & Furious) — Function Approximation
 # --------------------------------------------------------------------------- #
 # 9 discrete acceleration actions (ax, ay) in {-1,0,1}^2.
