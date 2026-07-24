@@ -679,15 +679,17 @@ class Room2CloningLab:
     ALGO = "SARSA (on-policy TD control)"
     SIZE = 10
     STEP_REWARD = -1.0
-    EXIT_REWARD = 1000000.0
-    BUTTON_REWARD = 500000.0
-    BONUS_REWARD = 100000.0
+    EXIT_REWARD = 10000.0
+    BUTTON_REWARD = 5000.0
+    BONUS_REWARD = 1000.0
+    NEG_REWARD = -100.0
 
     # row 0 = top.  '.' blank  '#' wall  '~' slippery  'S' start  'E' exit
-    # 'D' door  'B' plate/button  'X' box  'G' bonus (+100000, one-off)  'R' reset
+    # 'D' door  'B' plate/button  'X' box  'G' bonus (+1000, one-off)  'R' reset
+    # 'N' negative-reward tile (−100, every time you step on it)
     LAYOUT = [
-        "ED........",
-        "#.........",
+        "ED..NN~...",
+        "#NN~...NN.",
         ".....####.",
         "~~~..#B...",
         "#~#..#.X.#",
@@ -698,10 +700,12 @@ class Room2CloningLab:
         "S......X.B",
     ]
     SLIP = {
-        (0, 3): {RIGHT: [(0.30, RIGHT), (0.70, UP)]},
-        (1, 3): {DOWN:  [(0.40, DOWN),  (0.60, RIGHT)]},
-        (2, 3): {LEFT:  [(0.40, LEFT),  (0.60, UP)]},
-        (1, 4): {DOWN:  [(0.40, DOWN),  (0.60, UP)]},
+        (6, 0): {DOWN:  [(0.40, DOWN),  (0.60, RIGHT)]},   # row 1, col 7
+        (3, 1): {UP:    [(0.40, LEFT),  (0.60, UP)]},      # row 2, col 4
+        (0, 3): {RIGHT: [(0.30, RIGHT), (0.70, UP)]},      # row 4, col 1
+        (1, 3): {DOWN:  [(0.40, DOWN),  (0.60, RIGHT)]},   # row 4, col 2
+        (2, 3): {LEFT:  [(0.40, LEFT),  (0.60, UP)]},      # row 4, col 3
+        (1, 4): {DOWN:  [(0.40, DOWN),  (0.60, UP)]},      # row 5, col 2
     }
 
     def __init__(self, seed=None):
@@ -713,6 +717,7 @@ class Room2CloningLab:
 
         self.walls, self.doors, self.slippery, self.bonus_at = set(), set(), {}, {}
         self.buttons, self.box_start = [], []
+        self.negatives = set()
         self.start = self.exit = self.reset_tile = None
         ice = set()
         for row, line in enumerate(self.LAYOUT):
@@ -727,6 +732,7 @@ class Room2CloningLab:
                 elif ch == "B": self.buttons.append(c)
                 elif ch == "X": self.box_start.append(c)
                 elif ch == "G": self.bonus_at[c] = None
+                elif ch == "N": self.negatives.add(c)
                 elif ch == "~": ice.add(c)
         for (cx, cr), rules in self.SLIP.items():
             self.slippery[(cx, self.SIZE - 1 - cr)] = rules
@@ -819,6 +825,8 @@ class Room2CloningLab:
                 i = self.bonus_bit[nxt]
                 if not (mask >> i) & 1:
                     r += self.BONUS_REWARD; mask |= 1 << i
+            if nxt in self.negatives:                        # penalty tile (repeatable)
+                r += self.NEG_REWARD
             if nxt == self.reset_tile:                       # dead-lock escape
                 agent = self.start
                 boxes = set(self.box_start)                  # positions only; keep mask/paid
@@ -842,6 +850,7 @@ class Room2CloningLab:
                     walls=self.walls, doors=self.doors, slippery=self.slippery,
                     buttons=self.buttons, box_start=self.box_start,
                     bonuses=self.bonus_at, bonus_bit=self.bonus_bit,
+                    negatives=self.negatives, neg_reward=self.NEG_REWARD,
                     reset_tile=self.reset_tile, button_reward=self.BUTTON_REWARD,
                     bonus_reward=self.BONUS_REWARD, exit_reward=self.EXIT_REWARD,
                     traps=set(), cliff=set())

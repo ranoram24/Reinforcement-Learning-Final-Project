@@ -56,10 +56,10 @@ THEMES = {
         even="#02180c", odd="#010f07", start_c="#043016",
         wall_c="#065f46", pit_c="#7f1d1d", cliff_c="#0b3d1e", goal_c="#0a5c2f",
         door_c="#064e2b", button_c="#0f766e", bonus_c="#4a1d5f", reset_c="#3f3f46",
-        slip_a="#022c14", slip_b="#043a1b",
-        agent="🐕", wall="🟩", slip="🟩", slip_name="code", pit="🕳️", cliff="🕶️",
+        neg_c="#7f1d1d", slip_a="#022c14", slip_b="#043a1b",
+        agent="🐕", wall="🟩", slip="💻", slip_name="code", pit="🕳️", cliff="🕶️",
         goal="🚪", start="🐾",
-        box="📦", plate="🔘", door="🔒", exit="🚪", reset="🔄", bonus="💊"),
+        box="📦", plate="🔘", door="🔒", exit="🚪", reset="🔄", bonus="💊", neg="⚠️"),
     "garage": dict(  # The Fast and the Furious
         movie="The Fast and the Furious", board="#0a0a12", grid="#241b2e",
         accent="#ec4899", car="🚗", agent="🏎️", exit="🏁"),
@@ -247,6 +247,8 @@ def render_sokoban_html(meta, theme, agent=None, boxes=None, door_open=False,
     buttons = set(meta["buttons"])
     bonus_bit, reset_tile = meta["bonus_bit"], meta["reset_tile"]
     btn_r, bon_r, exit_r = meta["button_reward"], meta["bonus_reward"], meta["exit_reward"]
+    negatives = set(meta.get("negatives", ()))
+    neg_r = meta.get("neg_reward", 0)
     boxes = set(boxes) if boxes is not None else set(meta["box_start"])
     fs = int(cell * 0.5)
 
@@ -260,6 +262,7 @@ def render_sokoban_html(meta, theme, agent=None, boxes=None, door_open=False,
         if c in buttons:                 return T["button_c"]
         if c == exit_c:                  return T["goal_c"]
         if c == reset_tile:              return T["reset_c"]
+        if c in negatives:               return T["neg_c"]
         if c in bonus_bit and not collected(c):  return T["bonus_c"]
         if c in ice:
             return (f"repeating-linear-gradient(45deg,{T['slip_a']},{T['slip_a']} 5px,"
@@ -279,6 +282,8 @@ def render_sokoban_html(meta, theme, agent=None, boxes=None, door_open=False,
         if c == exit_c:                  return f"{T['exit']}<span class='rlrw pos'>+{exit_r:g}</span>"
         if c in buttons:                 return f"{T['plate']}<span class='rlrw pos'>+{btn_r:g}</span>"
         if c == reset_tile:              return T["reset"]
+        if c in negatives:
+            return f"{T['neg']}<span class='rlrw neg'>{neg_r:g}</span>"
         if c in bonus_bit and not collected(c):
             return f"{T['bonus']}<span class='rlrw pos'>+{bon_r:g}</span>"
         if c in ice:                     return T["slip"]
@@ -294,6 +299,7 @@ def render_sokoban_html(meta, theme, agent=None, boxes=None, door_open=False,
         if c == exit_c:     return f"Exit — +{exit_r:g}, ends the episode"
         if c in buttons:    return f"Pressure plate — +{btn_r:g} the first time a box lands here"
         if c == reset_tile: return "Reset tile — returns all positions to start (keeps bonuses/plates)"
+        if c in negatives:  return f"Hazard — {neg_r:g} every time you step on it"
         if c in bonus_bit:  return f"Bonus — +{bon_r:g} (one-off)"
         if c in ice:        return _slip_tip(ice.get(c))
         return None
@@ -334,6 +340,9 @@ def render_legend(theme, meta):
             (T["door"], "ice-gate · opens when both plates covered"),
             (T["bonus"], f"bonus · +{meta.get('bonus_reward', 0):g} (one-off)"),
         ]
+        if meta.get("negatives"):
+            chips.append((T.get("neg", "⚠️"),
+                          f"hazard · {meta.get('neg_reward', 0):g} each step on it"))
         if meta.get("reset_tile"):
             chips.append((T["reset"], "reset · positions back to start"))
         chips += [

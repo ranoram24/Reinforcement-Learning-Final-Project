@@ -188,9 +188,9 @@ def sidebar():
                                "idol +100000 opens the gate, plate +10000 (once, wakes the "
                                "boulder), catch −100000 (kept everything), exit +200000.")
         else:
-            st.sidebar.caption("On-policy SARSA. Push both 📦 onto the plates 🔘 (+500000 each) "
-                               "to open the gate, then reach the exit (+1000000). Step −1; "
-                               "💊 bonuses +100000 (one-off).")
+            st.sidebar.caption("On-policy SARSA. Push both 📦 onto the plates 🔘 (+5000 each) "
+                               "to open the gate, then reach the exit (+10000). Step −1; "
+                               "💊 bonuses +1000 (one-off); ⚠️ hazards −100 each step on them.")
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
@@ -540,8 +540,11 @@ def sokoban_notes(entry, ep):
     meta = entry["meta"]
     walls = meta.get("walls", set())
     buttons = set(meta.get("buttons", ()))
+    negatives = set(meta.get("negatives", ()))
+    reset_tile = meta.get("reset_tile")
     size = meta.get("size", 10)
     br, bor = meta.get("button_reward", 0), meta.get("bonus_reward", 0)
+    ngr = meta.get("neg_reward", 0)
     gamma = float(entry["params"].get("gamma", 1.0))
     frames = ep["frames"]
     acts = ep.get("actions") or []
@@ -568,6 +571,12 @@ def sokoban_notes(entry, ep):
                 ev.append("pushed 📦 one cell")
         if int(cur.get("mask", 0)) & ~int(prev.get("mask", 0)):
             ev.append(f"grabbed a 💊 bonus (+{bor:g})")
+        if ca in negatives:
+            ev.append(f"stepped on a hazard ({ngr:g})")
+        if reset_tile is not None and a is not None:     # deliberately moved onto reset
+            dx, dy = E._DELTA[a]
+            if (pa[0] + dx, pa[1] + dy) == tuple(reset_tile):
+                ev.append("hit the reset 🔄 — everything back to start")
         if cur.get("door_open") and not prev.get("door_open"):
             ev.append("both plates covered — the ice-gate opens 🔓")
         if ca == pa and pbx == cbx and a is not None:    # Hezki did not move
