@@ -286,25 +286,30 @@ def test_cliff_resets_not_terminal_and_sarsa_finds_a_safe_path():
 # --------------------------------------------------------------------------- #
 # Room 4 — continuous physics + tile coding
 # --------------------------------------------------------------------------- #
-def test_room4_collision_exit_and_soft_walls():
+def test_room4_track_collision_and_finish():
     env = E.Room4Garage(shaping=False)
-    assert env._in_obstacle(3.5, 3.0)                      # inside a parked car
-    env.reset(); env.X, env.Y, env.Vx, env.Vy = 3.4, 3.0, 3.0, 0.0
-    _, r, done = env.step(4)                               # action 4 == (0,0) accel
-    assert done and r == -100.0                            # drifts into the car → crash
-    env.reset(); env.X, env.Y = 8.6, 8.6                   # already in the exit corner
-    _, r, done = env.step(4)                               # (0,0) accel: stays put
-    assert done and r == 100.0 and env.is_success()        # exit region reached
-    # soft wall clamps instead of killing
-    env.reset(); env.X, env.Vx = 9.98, 3.0
-    _, r, done = env.step(5)
-    assert not done and env.X <= 10.0 and env.Vx == 0.0
+    # start is on the white road; a point far off it is a wall
+    assert not env._collides(*env.start)
+    assert env._collides(0.2, 5.0)                         # bottom-left corner is black wall
+    # driving straight into the wall is blocked (position frozen) and costs -500
+    env.reset(); env.X, env.Y = 2.0, 5.0                  # centre of the left straight
+    hit = None
+    for _ in range(300):                                   # push left until the hitbox meets the wall
+        _, r, done = env.step(1)                           # action 1 == velocity (-1, 0)
+        if r == env.COLLISION_PENALTY:
+            hit = (env.X, env.Y); break
+    assert hit is not None and not done
+    _, r, done = env.step(1)                               # still shoving into the wall
+    assert r == env.COLLISION_PENALTY and (env.X, env.Y) == hit and env.Vx == 0.0
+    # crossing the finish line pays +1000/total_time and ends the episode
+    env.reset(); env.X, env.Y = env.finish
+    _, r, done = env.step(4)                               # action 4 == (0,0): stays on the line
+    assert done and env.is_success() and r == 1000.0 / (env.t * env.DT)
 
 
-def test_room4_wavefront_reachable_from_start():
+def test_room4_potential_points_along_the_road():
     env = E.Room4Garage()
-    assert env._phi(1.0, 1.0) > env._phi(3.5, 3.0)         # start better than inside a car
-    assert env._phi(9.0, 9.0) > env._phi(1.0, 1.0)         # nearer exit ⇒ higher potential
+    assert env._phi(*env.finish) > env._phi(*env.start)    # nearer the finish ⇒ higher potential
 
 
 def test_tilecoder_shapes():

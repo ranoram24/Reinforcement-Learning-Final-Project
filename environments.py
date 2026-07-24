@@ -859,81 +859,141 @@ class Room2CloningLab:
 # --------------------------------------------------------------------------- #
 # Room 4 — The Hovercar Garage (Fast & Furious) — Function Approximation
 # --------------------------------------------------------------------------- #
-# 9 discrete acceleration actions (ax, ay) in {-1,0,1}^2.
-ACCEL_ACTIONS = [(ax, ay) for ax in (-1, 0, 1) for ay in (-1, 0, 1)]
+# 9 discrete VELOCITY actions (vx, vy) in {-1,0,1}^2 — the car sets its velocity.
+VEL_ACTIONS = [(vx, vy) for vx in (-1, 0, 1) for vy in (-1, 0, 1)]
+ACCEL_ACTIONS = VEL_ACTIONS                                   # backwards-compat alias
 
 
 class Room4Garage:
-    """Continuous 2-D chase. State = [X, Y, Vx, Vy], solved with tile-coded
-    linear function approximation (see algorithms.LinearFAAgent)."""
+    """Continuous 2-D time-trial on a winding Tokyo-Drift canyon road.
 
-    NAME = "Room 4 · The Hovercar Garage"
-    MOVIE = "The Fast and the Furious (2001)"
+    The LAYOUT is an occupancy grid ('#' = black wall, '.'/'S'/'T' = drivable
+    road) mapped onto the continuous 10×10 m space — but the car itself moves
+    CONTINUOUSLY and diagonally; the grid is only how the track is defined and
+    drawn (rendered without grid lines, so it reads as a smooth track).
+
+    State = [X, Y, Vx, Vy]; nine discrete VELOCITY actions (vx, vy) ∈ {-1,0,1}²;
+    every step advances DT = 0.02 s, so the car moves v·DT metres.  The car has
+    a hitbox and CANNOT pass through walls: a move whose hitbox would touch a
+    wall is blocked (the car stops) and costs COLLISION_PENALTY that step.
+    Reaching the finish cell pays FINISH_BONUS / total_time (total_time =
+    steps · DT), so a faster lap scores higher.  Solved with tile-coded linear
+    function approximation; a wave-front potential over the free cells provides
+    follow-the-road shaping (φ = −metres-left-to-finish).
+    """
+
+    NAME = "Room 4 · Tokyo Drift Canyon"
+    MOVIE = "The Fast and the Furious: Tokyo Drift (2006)"
     ALGO = "Semi-gradient Q-Learning + tile-coding (Function Approximation)"
     DT = 0.02
+    COLLISION_PENALTY = -500.0
+    FINISH_BONUS = 1000.0
+    HITBOX = 0.25                 # car half-size (metres) — fits the 1 m lanes
 
-    def __init__(self, v_max=3.0, max_steps=800, shaping=True,
-                 shaping_coef=5.0, shaping_gamma=1.0, hard_walls=False):
-        self.v_max = float(v_max)
+    # 10×10 occupancy grid (each cell = 1×1 m).  '#' wall · '.' road ·
+    # 'S' start · 'T' finish.  Row 0 = top.  This is only the layout definition;
+    # the car itself moves continuously (see the class docstring).
+    TRACK_GRID = [
+        "#......###",
+        "#.###...##",
+        "#....#...#",
+        "####..#..#",
+        "#....#...#",
+        "...##.....",
+        "..##...##.",
+        ".##...##..",
+        ".##..##...",
+        "S#T..#####",
+    ]
+
+    def __init__(self, max_steps=2500, shaping=True, shaping_coef=15.0,
+                 shaping_gamma=1.0, seed=None, **_legacy):
         self.max_steps = int(max_steps)
-        self.hard_walls = bool(hard_walls)
-        self.start = (1.0, 1.0)
-        self.bounds = (0.0, 10.0, 0.0, 10.0)                 # xmin,xmax,ymin,ymax
-        # Parked cars as axis-aligned boxes (xmin, xmax, ymin, ymax).
-        self.obstacles = [(3.0, 4.0, 0.0, 6.0), (6.0, 7.0, 4.0, 10.0)]
-        self.exit_region = (8.5, 8.5)                        # X>8.5 AND Y>8.5
-        self.n_actions = 9
-        self.actions = list(range(9))
-        self.state_low = np.array([0.0, 0.0, -self.v_max, -self.v_max])
-        self.state_high = np.array([10.0, 10.0, self.v_max, self.v_max])
-        # Potential-based reward shaping (Ng et al. 1999) using an obstacle-aware
-        # wave-front distance-to-goal.  Policy-invariant, but turns the sparse
-        # serpentine maze into a learnable gradient.  Toggerable from the UI.
         self.shaping = bool(shaping)
         self.shaping_coef = float(shaping_coef)
         self.shaping_gamma = float(shaping_gamma)
-        self._build_distance_map()
+        self.bounds = (0.0, 10.0, 0.0, 10.0)                 # xmin,xmax,ymin,ymax
+        self.n_actions = 9
+        self.actions = list(range(9))
+        self.state_low = np.array([0.0, 0.0, -1.0, -1.0])
+        self.state_high = np.array([10.0, 10.0, 1.0, 1.0])
+        self._build_track()
+        self._build_maps()
         self._succeeded = False
         self.reset()
 
-    # ---- obstacle-aware wave-front potential ----------------------------- #
-    def _build_distance_map(self, res=0.2, margin=0.15):
-        n = int(round(10.0 / res))
-        self._dm_res, self._dm_n = res, n
-        centres = (np.arange(n) + 0.5) * res
-        blocked = np.zeros((n, n), dtype=bool)               # index [ix, iy]
-        for xn, xx, yn, yx in self.obstacles:
-            mx = (centres >= xn - margin) & (centres <= xx + margin)
-            my = (centres >= yn - margin) & (centres <= yx + margin)
-            blocked |= np.outer(mx, my)
+    # ---- grid geometry --------------------------------------------------- #
+    def _build_track(self):
+        g = self.TRACK_GRID
+        self.NROW, self.NCOL = len(g), len(g[0])
+        self.cw, self.ch = 10.0 / self.NCOL, 10.0 / self.NROW
+        self._start_cell = self._finish_cell = None
+        for r, row in enumerate(g):
+            for c, ce in enumerate(row):
+                if ce == "S":   self._start_cell = (r, c)
+                elif ce == "T": self._finish_cell = (r, c)
+        self.start = self._cell_center(*self._start_cell)
+        self.finish = self._cell_center(*self._finish_cell)
+
+    def _cell_center(self, r, c):
+        return ((c + 0.5) * self.cw, (self.NROW - 1 - r + 0.5) * self.ch)
+
+    def _cell_of(self, x, y):
+        c = min(self.NCOL - 1, max(0, int(x / self.cw)))
+        r = min(self.NROW - 1, max(0, self.NROW - 1 - int(y / self.ch)))
+        return r, c
+
+    def _is_wall_pt(self, x, y):
+        if x < 0.0 or x > 10.0 or y < 0.0 or y > 10.0:
+            return True
+        r, c = self._cell_of(x, y)
+        return self.TRACK_GRID[r][c] == "#"
+
+    def _collides(self, x, y):
+        """True if the car's hitbox at (x, y) touches a wall or the border."""
+        h = self.HITBOX
+        return any(self._is_wall_pt(x + dx, y + dy)
+                   for dx in (-h, 0.0, h) for dy in (-h, 0.0, h))
+
+    def _build_maps(self, res=0.1):
+        """Wave-front BFS over the free cells → −(metres left to finish), for
+        potential-based shaping.  Pre-computed on a fine grid → O(1) look-ups."""
+        n = int(round(10.0 / res)); self._res, self._n = res, n
+        blocked = np.zeros((n, n), dtype=bool)               # [ix, iy]
+        for ix in range(n):
+            x = (ix + 0.5) * res
+            for iy in range(n):
+                blocked[ix, iy] = self._is_wall_pt(x, (iy + 0.5) * res)
         INF = 10 ** 9
         dist = np.full((n, n), INF, dtype=float)
         dq = deque()
-        goal = np.outer(centres > 8.5, centres > 8.5) & ~blocked
-        for ix, iy in zip(*np.where(goal)):
-            dist[ix, iy] = 0.0
-            dq.append((ix, iy))
-        while dq:                                            # BFS from the exit
-            ix, iy = dq.popleft()
-            d0 = dist[ix, iy]
+        fr, fc = self._finish_cell
+        for ix in range(n):
+            for iy in range(n):
+                if not blocked[ix, iy] and \
+                        self._cell_of((ix + 0.5) * res, (iy + 0.5) * res) == (fr, fc):
+                    dist[ix, iy] = 0.0; dq.append((ix, iy))
+        while dq:                                            # BFS from the finish
+            ix, iy = dq.popleft(); d0 = dist[ix, iy]
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 jx, jy = ix + dx, iy + dy
                 if 0 <= jx < n and 0 <= jy < n and not blocked[jx, jy] \
                         and dist[jx, jy] > d0 + 1:
-                    dist[jx, jy] = d0 + 1
-                    dq.append((jx, jy))
-        phi = -dist * res                                    # potential in metres
+                    dist[jx, jy] = d0 + 1; dq.append((jx, jy))
+        phi = -dist * res
         far = phi[dist < INF].min() if np.any(dist < INF) else 0.0
-        phi[dist >= INF] = far - 5.0                          # walls/unreachable
+        phi[dist >= INF] = far - 5.0                          # walls / unreachable
         self._phi_map = phi
 
     def _phi(self, x, y):
-        ix = min(self._dm_n - 1, max(0, int(x / self._dm_res)))
-        iy = min(self._dm_n - 1, max(0, int(y / self._dm_res)))
-        return self._phi_map[ix, iy]
+        ix = min(self._n - 1, max(0, int(x / self._res)))
+        iy = min(self._n - 1, max(0, int(y / self._res)))
+        return float(self._phi_map[ix, iy])
 
+    # ---- model-free interface -------------------------------------------- #
     def reset(self):
-        self.X, self.Y, self.Vx, self.Vy = 1.0, 1.0, 0.0, 0.0
+        self.X, self.Y = self.start
+        self.Vx = self.Vy = 0.0
         self.t = 0
         self._succeeded = False
         return self._obs()
@@ -941,42 +1001,26 @@ class Room4Garage:
     def _obs(self):
         return np.array([self.X, self.Y, self.Vx, self.Vy], dtype=float)
 
-    def _in_obstacle(self, x, y):
-        return any(xn <= x <= xx and yn <= y <= yx
-                   for (xn, xx, yn, yx) in self.obstacles)
-
-    def _out_of_bounds(self, x, y):
-        return x < 0.0 or x > 10.0 or y < 0.0 or y > 10.0
-
     def step(self, a):
         ox, oy = self.X, self.Y
-        ax, ay = ACCEL_ACTIONS[a]
-        self.Vx = float(np.clip(self.Vx + ax, -self.v_max, self.v_max))
-        self.Vy = float(np.clip(self.Vy + ay, -self.v_max, self.v_max))
-        self.X += self.Vx * self.DT
-        self.Y += self.Vy * self.DT
+        vx, vy = VEL_ACTIONS[a]
+        nx, ny = self.X + vx * self.DT, self.Y + vy * self.DT
         self.t += 1
 
-        # Parked cars are always a fatal crash (absorbing, -100).
-        if self._in_obstacle(self.X, self.Y):
-            return self._obs(), -100.0, True
+        if self._collides(nx, ny):                           # can't drive through walls
+            self.Vx = self.Vy = 0.0                          # stopped by the barrier
+            reward = self.COLLISION_PENALTY
+        else:
+            self.X, self.Y = nx, ny
+            self.Vx, self.Vy = float(vx), float(vy)
+            reward = 0.0
 
-        bumped = False
-        if self._out_of_bounds(self.X, self.Y):
-            if self.hard_walls:                              # strict MD reading
-                return self._obs(), -100.0, True
-            # soft garage wall: clamp position, kill inward velocity, small nudge
-            if self.X < 0.0 or self.X > 10.0:
-                self.X = float(np.clip(self.X, 0.0, 10.0)); self.Vx = 0.0
-            if self.Y < 0.0 or self.Y > 10.0:
-                self.Y = float(np.clip(self.Y, 0.0, 10.0)); self.Vy = 0.0
-            bumped = True
-
-        if self.X > self.exit_region[0] and self.Y > self.exit_region[1]:
+        # finish cell → +1000 / total_time (faster lap ⇒ bigger reward)
+        if self._cell_of(self.X, self.Y) == self._finish_cell:
             self._succeeded = True
-            return self._obs(), 100.0, True
+            total_time = self.t * self.DT
+            return self._obs(), self.FINISH_BONUS / total_time, True
 
-        reward = -0.1 + (-1.0 if bumped else 0.0)
         if self.shaping:                                     # potential-based shaping
             reward += self.shaping_coef * (
                 self.shaping_gamma * self._phi(self.X, self.Y) - self._phi(ox, oy))
@@ -988,12 +1032,13 @@ class Room4Garage:
         return self._succeeded
 
     def render_frame(self):
-        return {"agent": (self.X, self.Y)}
+        return {"agent": (self.X, self.Y), "vel": (self.Vx, self.Vy)}
 
     def render_meta(self):
-        return dict(kind="garage", bounds=self.bounds, obstacles=self.obstacles,
-                    exit_region=self.exit_region, start=self.start,
-                    agent_y=None)
+        return dict(kind="track", bounds=self.bounds, grid=list(self.TRACK_GRID),
+                    ncol=self.NCOL, nrow=self.NROW, start=self.start,
+                    finish=self.finish, hitbox=self.HITBOX,
+                    collision_penalty=self.COLLISION_PENALTY)
 
 
 # --------------------------------------------------------------------------- #

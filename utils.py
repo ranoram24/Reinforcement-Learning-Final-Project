@@ -60,9 +60,11 @@ THEMES = {
         agent="🐕", wall="🟩", slip="💻", slip_name="code", pit="🕳️", cliff="🕶️",
         goal="🚪", start="🐾",
         box="📦", plate="🔘", door="🔒", exit="🚪", reset="🔄", bonus="💊", neg="⚠️"),
-    "garage": dict(  # The Fast and the Furious
-        movie="The Fast and the Furious", board="#0a0a12", grid="#241b2e",
-        accent="#ec4899", car="🚗", agent="🏎️", exit="🏁"),
+    "garage": dict(  # The Fast and the Furious — Tokyo Drift
+        movie="Tokyo Drift", board="#04040a", grid="#1e1533",
+        accent="#ec4899", neon2="#22d3ee",
+        road="#eef2f7", road_edge="#ec4899", centerline="#fbbf24",
+        car="🏎️", agent="🏎️", exit="🏁", start="🟣", finish="🏁"),
     "space": dict(  # Star Wars
         movie="Star Wars", board="#02030a", grid="#0b1030",
         accent="#eab308", drone="🛸", agent="🚀"),
@@ -329,7 +331,10 @@ def render_legend(theme, meta):
     chips = [(T["agent"], "Hezki")]
     if theme in ("garage", "space"):
         if theme == "garage":
-            chips += [(T["car"], "parked car · crash −100"), (T["exit"], "exit · +100")]
+            chips += [("⬜", "the road — drive on the white"),
+                      (T["start"], "start"),
+                      (T["exit"], "finish · +1000 / total time"),
+                      ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
             chips += [(T["drone"], "drone · hit −1000"), ("👁️", "vision (sensor)"),
                       ("✅", "survive · +1 / step")]
@@ -398,6 +403,71 @@ def render_legend(theme, meta):
 # ========================================================================== #
 # Continuous rooms (4-5)
 # ========================================================================== #
+def render_track_svg(meta, theme, agent=None, trail=None, scale=44, pad=14, fill=False):
+    """Winding Tokyo-Drift canyon: the occupancy grid rendered as a continuous
+    white route (free cells merged, no grid lines) on a black board (= walls),
+    with a neon glow, a start circle and a checkered finish flag."""
+    T = THEMES[theme]
+    span = 10.0
+    W = int(span * scale + 2 * pad)
+
+    def px(x):  return pad + x * scale
+    def py(y):  return pad + (span - y) * scale                # flip: up is up
+
+    grid = meta["grid"]
+    nrow, ncol = meta["nrow"], meta["ncol"]
+    cwp = span * scale / ncol                                 # cell size in px
+    chp = span * scale / nrow
+
+    p = [f"<svg width='{W}' height='{W}' viewBox='0 0 {W} {W}' "
+         f"xmlns='http://www.w3.org/2000/svg'>"]
+    p.append("<defs><filter id='glow' x='-30%' y='-30%' width='160%' height='160%'>"
+             "<feGaussianBlur stdDeviation='5' result='b'/><feMerge>"
+             "<feMergeNode in='b'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs>")
+    # black board == the walls
+    p.append(f"<rect x='0' y='0' width='{W}' height='{W}' rx='16' fill='{T['board']}'/>")
+    # the road: white free cells, merged (no borders, slight overlap) → looks continuous
+    p.append("<g filter='url(#glow)'>")
+    for r in range(nrow):
+        for c in range(ncol):
+            if grid[r][c] != "#":
+                x = pad + c * cwp
+                y = pad + r * chp
+                p.append(f"<rect x='{x-0.6:.1f}' y='{y-0.6:.1f}' width='{cwp+1.2:.1f}' "
+                         f"height='{chp+1.2:.1f}' fill='{T['road']}'/>")
+    p.append("</g>")
+    # start marker (circle, like the image)
+    sx, sy = meta["start"]
+    p.append(f"<circle cx='{px(sx):.1f}' cy='{py(sy):.1f}' r='{min(cwp,chp)*0.3:.0f}' fill='none' "
+             f"stroke='{T['neon2']}' stroke-width='3' filter='url(#glow)'/>")
+    # finish: a little checkerboard + the flag
+    fx, fy = meta["finish"]
+    cs = min(cwp, chp) * 0.18
+    for r in range(4):
+        for c in range(4):
+            if (r + c) % 2 == 0:
+                p.append(f"<rect x='{px(fx)-2*cs+c*cs:.1f}' y='{py(fy)-2*cs+r*cs:.1f}' "
+                         f"width='{cs:.1f}' height='{cs:.1f}' fill='#111'/>")
+    p.append(f"<text x='{px(fx):.1f}' y='{py(fy)+9:.1f}' font-size='26' text-anchor='middle' "
+             f"style='filter:drop-shadow(0 0 5px {T['accent']})'>{T['exit']}</text>")
+    if trail:
+        tp = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in trail)
+        p.append(f"<polyline points='{tp}' fill='none' stroke='{T['accent']}' "
+                 f"stroke-width='2.5' opacity='.7'/>")
+    if agent is not None:
+        p.append(f"<text x='{px(agent[0]):.1f}' y='{py(agent[1])+9:.1f}' font-size='26' "
+                 f"text-anchor='middle' style='filter:drop-shadow(0 0 6px {T['accent']})'>"
+                 f"{T['agent']}</text>")
+    p.append("</svg>")
+    if fill:
+        return (f"<style>html,body{{margin:0;padding:0}}</style>"
+                f"<div style='min-height:100vh;box-sizing:border-box;padding:10px;"
+                f"background:{T['board']};display:flex;align-items:center;justify-content:center'>"
+                f"{''.join(p)}</div>")
+    return (f"<style>html,body{{margin:0;padding:0;background:{T['board']}}}</style>"
+            f"<div style='padding:8px;display:flex;justify-content:center'>{''.join(p)}</div>")
+
+
 def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
                      trail=None, scale=44, pad=14, fill=False):
     T = THEMES[theme]

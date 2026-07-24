@@ -50,11 +50,12 @@ ROOMS = {
                   plot="Hezki falls into an ancient temple. Off-policy Q-Learning is "
                        "aggressive — it grabs the idol 🏆, presses the plate for the bonus, "
                        "takes the boulder 🪨 hit, and still races to the exit."),
-    "room4": dict(label="Hovercar Garage", emoji="🏎️", stars=4, kind="fa",
-                  movie="The Fast and the Furious (2001)",
+    "room4": dict(label="Tokyo Drift Canyon", emoji="🏎️", stars=4, kind="fa",
+                  movie="The Fast and the Furious: Tokyo Drift (2006)",
                   algo="Tile-coding + semi-gradient Q-Learning (Function Approximation)",
-                  plot="Hezki steals a hovercar. Continuous physics, momentum and two "
-                       "parked cars force a high-speed weave to the exit."),
+                  plot="Hezki hits the downhill touge. A winding canyon road (drive on the "
+                       "white!), a hitbox that can't clip the black walls (−500/step), and a "
+                       "clock — finishing pays +1000/total_time, so a faster drift scores higher."),
     "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
                   movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
                   plot="Hezki flies an escape pod. Agent J fires neuralyzer-drones. "
@@ -117,14 +118,12 @@ def _randomize_hp(key):
         ss["e4"] = flt(0.10, 0.40, 0.01)
         ss["ed4"] = flt(0.0000, 0.0020, 0.0001)
         ss["ep4"] = integer(1500, 4000, 100)
-        ss["oi4"] = flt(50.0, 200.0, 10.0)
+        ss["oi4"] = flt(50.0, 300.0, 10.0)
         ss["nt4"] = integer(6, 12, 1)
         ss["nb4"] = integer(6, 10, 1)
-        ss["vm4"] = flt(2.0, 4.0, 0.5)
-        ss["ms4"] = integer(500, 1000, 1)
+        ss["ms4"] = integer(1600, 2500, 50)
         ss["sh4"] = True                       # shaping on — the room rarely solves without it
-        ss["sc4"] = flt(3.0, 8.0, 0.5)
-        ss["hw4"] = False
+        ss["sc4"] = flt(3.0, 12.0, 0.5)
     else:  # room5
         ss["v5"] = flt(2.0, 5.0, 0.5)
         ss["sp5"] = integer(8, 30, 1)
@@ -194,22 +193,22 @@ def sidebar():
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
-        p["epsilon"] = st.sidebar.slider("ε₀  exploration", 0.10, 1.0, 0.10, 0.01, key="e4")
+        p["epsilon"] = st.sidebar.slider("ε₀  exploration", 0.10, 1.0, 0.40, 0.01, key="e4")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
-                                           0.0, 0.05, 0.0, 0.0001, format="%.4f", key="ed4")
-        p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 2000, 100, key="ep4")
+                                           0.0, 0.05, 0.0002, 0.0001, format="%.4f", key="ed4")
+        p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 3000, 100, key="ep4")
         with st.sidebar.expander("Function-approximation & physics"):
-            p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 200.0, 100.0, 10.0, key="oi4")
+            p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 500.0, 60.0, 10.0, key="oi4")
             p["n_tilings"] = st.slider("tilings", 4, 16, 8, 1, key="nt4")
             p["n_bins"] = st.slider("bins / dim", 4, 12, 8, 1, key="nb4")
-            p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm4")
-            p["max_steps"] = st.number_input("max steps / episode", 0, 2000, 800, 1, key="ms4")
-            p["shaping"] = st.checkbox("reward shaping (wave-front potential)", True, key="sh4")
-            p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 10.0, 5.0, 0.5, key="sc4")
-            p["hard_walls"] = st.checkbox("hard walls (−100 terminal on boundary)", False, key="hw4")
+            p["max_steps"] = st.number_input("max steps / episode", 0, 5000, 2500, 50, key="ms4")
+            p["shaping"] = st.checkbox("reward shaping (follow-the-road potential)", True, key="sh4")
+            p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 40.0, 15.0, 0.5, key="sc4")
         p["epsilon_min"] = 0.0
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
-        st.sidebar.caption("⏱️ ~1 min to train at default settings.")
+        st.sidebar.caption("🏁 Time-trial: velocity actions Vx,Vy∈{−1,0,1}, dt=0.02 s. Touching a "
+                           "wall −500/step; the car can't pass walls; finishing pays "
+                           "+1000/total_time (a faster lap scores higher).")
     else:  # room5
         p["vision"] = st.sidebar.slider("👁️ vision range X_obs (m)", 0.5, 8.0, 3.0, 0.5, key="v5")
         p["spawn_every"] = st.sidebar.slider("drone spawn every N steps", 5, 60, 15, 1, key="sp5")
@@ -252,9 +251,8 @@ def build_env(key, p, seed=None):
     if key == "room3":                       # Room 3 = Dark Temple boulder (Q-Learning)
         return E.Room2DarkTemple(seed=seed)
     if key == "room4":
-        return E.Room4Garage(v_max=p["v_max"], max_steps=p["max_steps"],
-                             shaping=p["shaping"], shaping_coef=p["shaping_coef"],
-                             hard_walls=p["hard_walls"])
+        return E.Room4Garage(max_steps=p["max_steps"], shaping=p["shaping"],
+                             shaping_coef=p["shaping_coef"])
     return E.Room5SpaceEscape(vision=p["vision"], spawn_every=p["spawn_every"],
                               v_max=p["v_max"], max_steps=p["max_steps"], seed=seed)
 
@@ -312,6 +310,8 @@ def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
     if meta.get("kind") == "sokoban":
         return U.render_sokoban_html(meta, theme, agent=agent, boxes=boxes,
                                      door_open=door_open, mask=mask, fill=fill)
+    if meta.get("kind") == "track":
+        return U.render_track_svg(meta, theme, agent=agent, trail=trail, fill=fill)
     if ROOMS[key]["kind"] in ("dp", "grid"):
         return U.render_grid_html(meta, theme, agent=agent, policy=policy,
                                   fill=fill, mask=mask, chaser=chaser)
