@@ -66,7 +66,7 @@ THEMES = {
         accent="#eab308", drone="🛸", agent="🚀"),
 }
 
-ROOM_THEME = {"room1": "ice", "room2": "temple", "room3": "matrix",
+ROOM_THEME = {"room1": "ice", "room2": "matrix", "room3": "temple",
               "room4": "garage", "room5": "space"}
 
 
@@ -554,4 +554,4 @@ def path_compare(meta, path):
                     line=dict(color=C_MAIN, width=3), name="learned path")
     fig.update_xaxes(range=[-0.5, size - 0.5], dtick=1)
     fig.update_yaxes(range=[-0.5, size - 0.5], dtick=1)
-    return _layout(fig, "Q-Learning greedy path (cliff-hugging)", "x", "y")
+    return _layout(fig, "SARSA greedy path — the safe route around the cliff", "x", "y")

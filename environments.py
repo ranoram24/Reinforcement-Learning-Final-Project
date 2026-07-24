@@ -409,9 +409,9 @@ class Room2DarkTemple:
     State = (x, y, collected-mask, chaser-position or None).
     """
 
-    NAME = "Room 2 · The Dark Temple"
+    NAME = "Room 3 · The Dark Temple"     # (this env is used at grid position 'room3')
     MOVIE = "Raiders of the Lost Ark (1981)"
-    ALGO = "SARSA (on-policy TD control)"
+    ALGO = "Q-Learning (off-policy TD control)"
     SIZE = 10
     STEP_REWARD = 0.0
     EXIT_REWARD = 200000.0
@@ -619,9 +619,9 @@ class Room2DarkTemple:
 # Room 3 — The Cloning Lab (The Matrix) — Q-Learning (Cliff Walking)
 # --------------------------------------------------------------------------- #
 class Room3CloningLab(GridWorld):
-    NAME = "Room 3 · The Cloning Lab"
+    NAME = "Room 2 · The Cloning Lab"     # (this env is used at grid position 'room2')
     MOVIE = "The Matrix (1999)"
-    ALGO = "Q-Learning (off-policy TD control)"
+    ALGO = "SARSA (on-policy TD control)"
 
     def __init__(self, seed=None):
         # "Firewall" pillars force the safe route up and over, sharpening the

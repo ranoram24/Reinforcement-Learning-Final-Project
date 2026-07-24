@@ -189,7 +189,7 @@ class Sarsa(TDAgent):
     """On-policy TD(0): update towards the action actually taken next."""
 
     def train(self, snapshots=6, progress=None, record=40):
-        rewards, eps_hist, lengths, snaps, tapes = [], [], [], [], []
+        rewards, eps_hist, lengths, snaps, tapes, succ = [], [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -214,6 +214,7 @@ class Sarsa(TDAgent):
                 steps += 1
             eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
+            succ.append(bool(self.env.is_success()))       # did this episode escape?
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -225,14 +226,14 @@ class Sarsa(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final, tapes=tapes)
+                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
 
 
 class QLearning(TDAgent):
     """Off-policy TD(0): update towards the greedy next action (max)."""
 
     def train(self, snapshots=6, progress=None, record=40):
-        rewards, eps_hist, lengths, snaps, tapes = [], [], [], [], []
+        rewards, eps_hist, lengths, snaps, tapes, succ = [], [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -257,6 +258,7 @@ class QLearning(TDAgent):
                 steps += 1
             eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
+            succ.append(bool(self.env.is_success()))       # did this episode escape?
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -268,7 +270,7 @@ class QLearning(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final, tapes=tapes)
+                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
 
 
 # --------------------------------------------------------------------------- #

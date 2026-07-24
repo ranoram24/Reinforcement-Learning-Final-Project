@@ -227,20 +227,22 @@ def test_linear_epsilon_decay():
     assert min(eps) == 0.1 and eps[-1] == 0.1      # floored at ε_min
 
 
-def test_sarsa_learns_to_escape():
-    """Room 2 is a zig-zag corridor where ε-greedy alone never finds the idol —
-    optimistic initialisation is what makes it learnable."""
+def test_qlearning_solves_the_boulder_temple():
+    """Room 3 (Dark Temple) uses off-policy Q-Learning + a decaying-from-high ε.
+    That combination reliably solves the sparse, high-reward maze (SARSA does
+    not)."""
     env = E.Room2DarkTemple(seed=0)
-    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=0.10, epsilon_k=0.0,
-                  episodes=3000, max_steps=400, optimistic_init=500.0,
-                  seed=0).train(snapshots=3)
-    ev = E.Room2DarkTemple(seed=1)
-    wins = sum(A.rollout(ev, res["final_policy"], max_steps=400)["success"]
-               for _ in range(15))
-    assert wins >= 13                          # robust to the per-action slips
+    res = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.0002,
+                      epsilon_min=0.01, episodes=4000, max_steps=400,
+                      optimistic_init=0.0, seed=0).train(snapshots=3)
+    wins = sum(A.rollout(E.Room2DarkTemple(seed=s), res["final_policy"],
+                         max_steps=400)["success"] for s in range(15))
+    assert wins >= 13
 
 
-def test_cliff_resets_not_terminal_and_qlearning_hugs_cliff():
+def test_cliff_resets_not_terminal_and_sarsa_finds_a_safe_path():
+    """Room 2 (Cloning Lab / Cliff Walking) uses on-policy SARSA, which learns a
+    cautious path that reaches the exit without stepping on the cliff."""
     env = E.Room3CloningLab()
     env.reset()
     env._state = (1, 1)
@@ -249,9 +251,9 @@ def test_cliff_resets_not_terminal_and_qlearning_hugs_cliff():
     env._state = (9, 1)
     s2, r, done = env.step(E.DOWN)                         # (9,1) -> (9,0) is the exit
     assert s2 == env.goal and r == E.GOAL_REWARD and done
-    # learned greedy path avoids the cliff and reaches the goal
-    res = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.001,
-                      episodes=800, max_steps=200, seed=0).train(snapshots=2)
+    # SARSA learns a safe greedy path to the goal
+    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.001,
+                  epsilon_min=0.01, episodes=1500, max_steps=200, seed=0).train(snapshots=2)
     roll = A.rollout(env, res["final_policy"], max_steps=100)
     assert roll["success"]
     path = {f["agent"] for f in roll["frames"]}

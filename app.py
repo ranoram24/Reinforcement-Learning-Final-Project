@@ -40,16 +40,16 @@ ROOMS = {
                   movie="Ice Age (2002)", algo="Value Iteration (Dynamic Programming)",
                   plot="The MIB archive is frozen solid. Agent J's patrols are known, "
                        "so Hezki plans the perfect escape with a full model of the world."),
-    "room2": dict(label="Dark Temple", emoji="🏛️", stars=2, kind="grid",
-                  movie="Raiders of the Lost Ark (1981)", algo="SARSA (on-policy TD)",
-                  plot="Hezki falls into an ancient temple. He must grab the golden idol "
-                       "🏆 to open the stone gate, dodge spike pits that hurl him back to "
-                       "the start — and never touch the pressure plate, which wakes a "
-                       "boulder 🪨 that retraces his own trail."),
-    "room3": dict(label="Cloning Lab", emoji="🕶️", stars=3, kind="grid",
-                  movie="The Matrix (1999)", algo="Q-Learning (off-policy TD)",
-                  plot="Agent J clones himself like Agent Smith. Hezki must take a "
-                       "dangerous, aggressive shortcut along the cliff of clones."),
+    "room2": dict(label="Cloning Lab", emoji="🕶️", stars=2, kind="grid",
+                  movie="The Matrix (1999)", algo="SARSA (on-policy TD)",
+                  plot="Agent J clones himself like Agent Smith. On-policy SARSA plays it "
+                       "safe — it learns a cautious path that keeps its distance from the "
+                       "cliff of clones."),
+    "room3": dict(label="Dark Temple", emoji="🏛️", stars=3, kind="grid",
+                  movie="Raiders of the Lost Ark (1981)", algo="Q-Learning (off-policy TD)",
+                  plot="Hezki falls into an ancient temple. Off-policy Q-Learning is "
+                       "aggressive — it grabs the idol 🏆, presses the plate for the bonus, "
+                       "takes the boulder 🪨 hit, and still races to the exit."),
     "room4": dict(label="Hovercar Garage", emoji="🏎️", stars=4, kind="fa",
                   movie="The Fast and the Furious (2001)",
                   algo="Tile-coding + semi-gradient Q-Learning (Function Approximation)",
@@ -107,28 +107,29 @@ def sidebar():
         p["theta"] = st.sidebar.number_input("θ  convergence threshold", 1e-6, 1e-1,
                                              1e-4, format="%.6f", key="t1")
     elif key in ("room2", "room3"):
-        r2 = (key == "room2")
-        # Room 2 is a zig-zag corridor maze: ε-greedy random walks never reach the
-        # idol, so it defaults to low ε + optimistic init (directed exploration).
+        # Room 2 = Cliff Walking + SARSA ; Room 3 = Dark Temple boulder + Q-Learning.
+        boulder = (key == "room3")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key=f"a{key}")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key=f"g{key}")
-        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0,
-                                         0.10 if r2 else 1.0, 0.01, key=f"e{key}")
+        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key=f"e{key}")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
-                                           0.0, 0.05, 0.0 if r2 else 0.0010, 0.0001,
+                                           0.0, 0.05, 0.0002 if boulder else 0.0010, 0.0001,
                                            format="%.4f", key=f"ed{key}")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.50, 0.01, 0.01, key=f"em{key}")
         p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 3000.0,
-                                                 500.0 if r2 else 0.0, 50.0, key=f"oi{key}")
+                                                 0.0, 50.0, key=f"oi{key}")
         p["episodes"] = st.sidebar.number_input("episodes", 100, 40000,
-                                                3000 if r2 else 1000, 100, key=f"ep{key}")
+                                                4000 if boulder else 1000, 100, key=f"ep{key}")
         p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000, 400, 1, key=f"ms{key}")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"],
                                     p["epsilon_min"], p["episodes"]))
-        if r2:
-            st.sidebar.caption("Step reward is 0 here; the idol (+1000) opens the gate to the "
-                               "exit (+2000). Pressing the plate wakes the boulder instantly; "
-                               "it then retraces your route one step per move. ⏱️ ~7 s to train.")
+        if boulder:
+            st.sidebar.caption("Off-policy Q-Learning + a decaying ε solves this. Step reward 0; "
+                               "idol +100000 opens the gate, plate +10000 (once, wakes the "
+                               "boulder), catch −100000 (kept everything), exit +200000.")
+        else:
+            st.sidebar.caption("On-policy SARSA learns the SAFE path away from the cliff "
+                               "(step −1, cliff −100 + back to start, exit +100).")
     elif key == "room4":
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
@@ -181,10 +182,10 @@ def sidebar():
 def build_env(key, p, seed=None):
     if key == "room1":
         return E.Room1FrozenArchive(seed=seed)
-    if key == "room2":
-        return E.Room2DarkTemple(seed=seed)
-    if key == "room3":
+    if key == "room2":                       # Room 2 = Cliff Walking (SARSA)
         return E.Room3CloningLab(seed=seed)
+    if key == "room3":                       # Room 3 = Dark Temple boulder (Q-Learning)
+        return E.Room2DarkTemple(seed=seed)
     if key == "room4":
         return E.Room4Garage(v_max=p["v_max"], max_steps=p["max_steps"],
                              shaping=p["shaping"], shaping_coef=p["shaping_coef"],
@@ -364,10 +365,16 @@ def tab_charts(key, entry):
                    f"(θ = {entry['params']['theta']:g}). V(start) = {v0:.2f}  "
                    f"— the value of the whole plan: key → gate → exit (plus bonuses).")
     elif key in ("room2", "room3"):
+        succ = res.get("successes", [])
+        n, total = len(succ), int(sum(succ))
+        if n:
+            m1, m2 = st.columns(2)
+            m1.metric("🏆 Episodes escaped", f"{total:,}")
+            m2.metric("❌ Episodes not escaped", f"{n - total:,}")
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"]), use_container_width=True)
         c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
-        if key == "room3":
+        if key == "room2":                       # cliff room → learned-path plot
             roll = eval_roll(key, entry, entry["final_policy"], seed=1)
             path = [f["agent"] for f in roll["frames"]]
             st.plotly_chart(U.path_compare(entry["meta"], path), use_container_width=True)
