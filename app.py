@@ -54,8 +54,8 @@ ROOMS = {
                   movie="The Fast and the Furious: Tokyo Drift (2006)",
                   algo="Tile-coding + semi-gradient Q-Learning (Function Approximation)",
                   plot="Hezki hits the downhill touge. A winding canyon road (drive on the "
-                       "white!), a hitbox that can't clip the black walls (−500/step), and a "
-                       "clock — finishing pays +1000/total_time, so a faster drift scores higher."),
+                       "white!), a hitbox that can't clip the black walls, and a clock — "
+                       "finishing pays +1000/total_time, so a faster drift scores higher."),
     "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
                   movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
                   plot="Hezki flies an escape pod. Agent J fires neuralyzer-drones. "
@@ -120,10 +120,10 @@ def _randomize_hp(key):
         ss["ep4"] = integer(1500, 4000, 100)
         ss["oi4"] = flt(50.0, 300.0, 10.0)
         ss["nt4"] = integer(6, 12, 1)
-        ss["nb4"] = integer(6, 10, 1)
-        ss["ms4"] = integer(1600, 2500, 50)
+        ss["nb4"] = integer(8, 12, 1)
+        ss["ms4"] = integer(1800, 2600, 50)    # a lap needs ~1300 steps — keep the budget above it
         ss["sh4"] = True                       # shaping on — the room rarely solves without it
-        ss["sc4"] = flt(3.0, 12.0, 0.5)
+        ss["sc4"] = flt(20.0, 40.0, 5.0)
     else:  # room5
         ss["v5"] = flt(2.0, 5.0, 0.5)
         ss["sp5"] = integer(8, 30, 1)
@@ -191,24 +191,24 @@ def sidebar():
                                "to open the gate, then reach the exit (+10000). Step −1; "
                                "💊 bonuses +1000 (one-off); ⚠️ hazards −100 each step on them.")
     elif key == "room4":
-        p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.50, 0.05, key="a4")
+        p["alpha"] = st.sidebar.slider("α  learning rate", 0.05, 1.0, 0.30, 0.05, key="a4")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key="g4")
-        p["epsilon"] = st.sidebar.slider("ε₀  exploration", 0.10, 1.0, 0.40, 0.01, key="e4")
+        p["epsilon"] = st.sidebar.slider("ε₀  exploration", 0.10, 1.0, 0.50, 0.01, key="e4")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
-                                           0.0, 0.05, 0.0002, 0.0001, format="%.4f", key="ed4")
-        p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 3000, 100, key="ep4")
+                                           0.0, 0.05, 0.0004, 0.0001, format="%.4f", key="ed4")
+        p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 2500, 100, key="ep4")
         with st.sidebar.expander("Function-approximation & physics"):
             p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 500.0, 60.0, 10.0, key="oi4")
             p["n_tilings"] = st.slider("tilings", 4, 16, 8, 1, key="nt4")
-            p["n_bins"] = st.slider("bins / dim", 4, 12, 8, 1, key="nb4")
+            p["n_bins"] = st.slider("bins / dim", 4, 12, 10, 1, key="nb4")
             p["max_steps"] = st.number_input("max steps / episode", 0, 5000, 2500, 50, key="ms4")
             p["shaping"] = st.checkbox("reward shaping (follow-the-road potential)", True, key="sh4")
-            p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 40.0, 15.0, 0.5, key="sc4")
+            p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 40.0, 30.0, 0.5, key="sc4")
         p["epsilon_min"] = 0.0
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
-        st.sidebar.caption("🏁 Time-trial: velocity actions Vx,Vy∈{−1,0,1}, dt=0.02 s. Touching a "
-                           "wall −500/step; the car can't pass walls; finishing pays "
-                           "+1000/total_time (a faster lap scores higher).")
+        st.sidebar.caption("🏁 Time-trial: velocity actions Vx,Vy∈{−1,0,1}, dt=0.02 s. Drives the white "
+                           "road on a distance-to-finish reward route; wall −10/step; finish "
+                           "+1000/total_time. Needs ≥~1,500 max-steps to reach the finish; ~1-2 min.")
     else:  # room5
         p["vision"] = st.sidebar.slider("👁️ vision range X_obs (m)", 0.5, 8.0, 3.0, 0.5, key="v5")
         p["spawn_every"] = st.sidebar.slider("drone spawn every N steps", 5, 60, 15, 1, key="sp5")
@@ -449,6 +449,13 @@ def tab_charts(key, entry):
             path = [f["agent"] for f in roll["frames"]]
             st.plotly_chart(U.path_compare(entry["meta"], path), use_container_width=True)
     elif key == "room4":
+        succ = res.get("successes", [])
+        n, total = len(succ), int(sum(succ))
+        if n:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("🏆 Episodes escaped", f"{total:,}")
+            m2.metric("❌ Episodes not escaped", f"{n - total:,}")
+            m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
         c2.plotly_chart(U.length_curve(res["lengths"], window=50,

@@ -886,8 +886,8 @@ class Room4Garage:
     MOVIE = "The Fast and the Furious: Tokyo Drift (2006)"
     ALGO = "Semi-gradient Q-Learning + tile-coding (Function Approximation)"
     DT = 0.02
-    COLLISION_PENALTY = -500.0
-    FINISH_BONUS = 1000.0
+    COLLISION_PENALTY = -10.0        # mild nudge (walls already block movement) — a huge
+    FINISH_BONUS = 1000.0            # penalty just made the car too scared to move / diverge
     HITBOX = 0.25                 # car half-size (metres) — fits the 1 m lanes
 
     # 10×10 occupancy grid (each cell = 1×1 m).  '#' wall · '.' road ·

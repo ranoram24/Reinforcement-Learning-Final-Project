@@ -289,8 +289,8 @@ class TileCoder:
         self.tile_width = (self.high - self.low) / self.n_bins
         disp = (2 * np.arange(self.dims) + 1)                 # asymmetric shifts
         # per-tiling, per-dim offset matrix  (n_tilings, dims)
-        self.offsets = np.stack([(t * disp / self.n_tilings) * self.tile_width
-                                 for t in range(self.n_tilings)])
+        self.offsets = np.stack([((t * disp) % self.n_tilings / self.n_tilings) * self.tile_width 
+                         for t in range(self.n_tilings)])
         self.card = self.n_bins + 1
         self.tiles_per_tiling = self.card ** self.dims
         self.n_features = self.n_tilings * self.tiles_per_tiling
@@ -307,7 +307,7 @@ class TileCoder:
 
 
 class LinearFAAgent:
-    def __init__(self, env, alpha=0.5, gamma=0.99, epsilon=0.1,
+    def __init__(self, env, alpha=0.5, gamma=1.0, epsilon=0.1,
                  epsilon_k=0.0, epsilon_min=0.0, episodes=2000,
                  n_tilings=8, n_bins=8, optimistic_init=100.0,
                  max_steps=None, seed=None):
@@ -331,7 +331,7 @@ class LinearFAAgent:
         return self.w[:, feats].sum(axis=1)
 
     def train(self, snapshots=6, progress=None, record=25):
-        rewards, lengths, snaps, tapes = [], [], [], []
+        rewards, lengths, snaps, tapes, successes = [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -358,6 +358,7 @@ class LinearFAAgent:
                 steps += 1
             eps = max(self.eps_min, eps - self.eps_k)          # ε = ε₀ − K·t
             rewards.append(total); lengths.append(steps)
+            successes.append(bool(self.env.is_success()))      # reached the finish?
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -369,6 +370,137 @@ class LinearFAAgent:
         final = FAPolicy(self.w.copy(), self.coder)
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, lengths=lengths, epsilons=None,
+                    snapshots=snaps, final_policy=final, tapes=tapes,
+                    successes=successes)
+
+
+# --------------------------------------------------------------------------- #
+# Deep Q-Network (DQN) — neural-net function approximation (Room 4 option)
+# torch is imported lazily so the other rooms never depend on it.
+# --------------------------------------------------------------------------- #
+def _build_qnet(in_dim, n_actions, hidden):
+    import torch.nn as nn
+    return nn.Sequential(
+        nn.Linear(in_dim, hidden), nn.ReLU(),
+        nn.Linear(hidden, hidden), nn.ReLU(),
+        nn.Linear(hidden, n_actions))
+
+
+class DQNPolicy:
+    """Greedy policy over a trained Q-network (state normalised to [0,1])."""
+
+    def __init__(self, net, low, span):
+        self.net = net
+        self.low = np.asarray(low, dtype=float)
+        self.span = np.asarray(span, dtype=float)
+
+    def action(self, raw_state):
+        import torch
+        x = ((np.asarray(raw_state, dtype=float) - self.low) / self.span).astype(np.float32)
+        with torch.no_grad():
+            return int(self.net(torch.as_tensor(x)).argmax().item())
+
+
+class DQNAgent:
+    """Deep Q-Network: an MLP Q(s,·) trained with experience replay + a target
+    network (Mnih et al. 2015).  Same train()/policy interface as the other
+    learners so it drops straight into the app's train/replay pipeline."""
+
+    def __init__(self, env, alpha=1e-3, gamma=0.99, epsilon=1.0, epsilon_k=0.0025,
+                 epsilon_min=0.05, episodes=600, max_steps=None, hidden=128,
+                 buffer=50000, batch=64, target_every=500, train_freq=1,
+                 warmup=1000, seed=None):
+        import torch
+        self.env = env
+        self.n_actions = env.n_actions
+        self.low = np.asarray(env.state_low, dtype=float)
+        high = np.asarray(env.state_high, dtype=float)
+        self.span = np.where(high > self.low, high - self.low, 1.0)
+        self.gamma = float(gamma)
+        self.eps0, self.eps_k, self.eps_min = float(epsilon), float(epsilon_k), float(epsilon_min)
+        self.episodes = int(episodes)
+        self.max_steps = int(max_steps or env.max_steps)
+        self.batch, self.target_every = int(batch), int(target_every)
+        self.train_freq, self.warmup = int(train_freq), int(warmup)
+        self.rng = np.random.default_rng(seed)
+        torch.manual_seed(int(seed or 0))
+        self.q = _build_qnet(len(self.low), self.n_actions, hidden)
+        self.tgt = _build_qnet(len(self.low), self.n_actions, hidden)
+        self.tgt.load_state_dict(self.q.state_dict())
+        self.opt = torch.optim.Adam(self.q.parameters(), lr=float(alpha))
+        self._buf, self._cap, self._pos = [], int(buffer), 0
+
+    def _norm(self, s):
+        return ((np.asarray(s, dtype=float) - self.low) / self.span).astype(np.float32)
+
+    def _store(self, tr):
+        if len(self._buf) < self._cap:
+            self._buf.append(tr)
+        else:
+            self._buf[self._pos] = tr
+        self._pos = (self._pos + 1) % self._cap
+
+    def _policy(self):
+        import copy
+        return DQNPolicy(copy.deepcopy(self.q).eval(), self.low, self.span)
+
+    def _learn(self, huber):
+        import torch
+        idx = self.rng.integers(0, len(self._buf), size=self.batch)
+        b = [self._buf[i] for i in idx]
+        s = torch.as_tensor(np.stack([t[0] for t in b]))
+        a = torch.as_tensor(np.array([t[1] for t in b]), dtype=torch.long).unsqueeze(1)
+        r = torch.as_tensor(np.array([t[2] for t in b], dtype=np.float32)).unsqueeze(1)
+        s2 = torch.as_tensor(np.stack([t[3] for t in b]))
+        d = torch.as_tensor(np.array([t[4] for t in b], dtype=np.float32)).unsqueeze(1)
+        q = self.q(s).gather(1, a)
+        with torch.no_grad():
+            target = r + self.gamma * (1.0 - d) * self.tgt(s2).max(1, keepdim=True)[0]
+        loss = huber(q, target)
+        self.opt.zero_grad(); loss.backward(); self.opt.step()
+
+    def train(self, snapshots=6, progress=None, record=25):
+        import torch
+        rewards, lengths, snaps, tapes, eps_hist = [], [], [], [], []
+        milestones = _milestones(self.episodes, snapshots)
+        rec_at = _record_points(self.episodes, record)
+        huber = torch.nn.SmoothL1Loss()
+        eps, gstep = self.eps0, 0
+        for ep in range(self.episodes):
+            s = self._norm(self.env.reset())
+            taping = ep in rec_at
+            frames = [self.env.render_frame()] if taping else None
+            acts, rews = ([], []) if taping else (None, None)
+            done, total, steps = False, 0.0, 0
+            while not done and steps < self.max_steps:
+                if self.rng.random() < eps:
+                    a = int(self.rng.integers(self.n_actions))
+                else:
+                    with torch.no_grad():
+                        a = int(self.q(torch.as_tensor(s)).argmax().item())
+                s2raw, r, done = self.env.step(a)
+                s2 = self._norm(s2raw)
+                if taping:
+                    frames.append(self.env.render_frame()); acts.append(a); rews.append(r)
+                self._store((s, a, float(r), s2, float(done)))
+                s = s2; total += r; steps += 1; gstep += 1
+                if len(self._buf) >= max(self.batch, self.warmup) and gstep % self.train_freq == 0:
+                    self._learn(huber)
+                if gstep % self.target_every == 0:
+                    self.tgt.load_state_dict(self.q.state_dict())
+            eps = max(self.eps_min, eps - self.eps_k)
+            rewards.append(total); lengths.append(steps); eps_hist.append(eps)
+            if taping:
+                tapes.append(dict(episode=ep, reward=total, steps=steps,
+                                  success=self.env.is_success(), frames=frames,
+                                  actions=acts, step_rewards=rews))
+            if ep in milestones:
+                snaps.append((ep, self._policy()))
+            if progress:
+                progress(ep + 1, self.episodes)
+        final = self._policy()
+        snaps.append((self.episodes, final))
+        return dict(rewards=rewards, lengths=lengths, epsilons=eps_hist,
                     snapshots=snaps, final_policy=final, tapes=tapes)
 
 
