@@ -1045,36 +1045,58 @@ class Room4Garage:
 # Room 5 — The Space Escape (Star Wars) — dynamic obstacles + partial observ.
 # --------------------------------------------------------------------------- #
 class Room5SpaceEscape:
-    """Dodge falling neuralyzer-drones.  The agent moves on the X axis only
-    (Y fixed) and observes ONLY [Vx, distance-to-nearest-aligned-obstacle]
-    (or -1 when nothing is within its vision range) — a deliberate POMDP."""
+    """Star-Wars gauntlet.  A ship that moves only on X must survive S seconds
+    against a DYNAMIC stream of falling obstacles (up to MAX_OBSTACLES at once,
+    each a random position + type).  It carries N_SHOTS laser shots; a shot
+    damages the nearest obstacle aligned with its column (± SHOT_DX leniency),
+    and destroying one pays +DESTROY_REWARD.  Partial observation: beyond its
+    own (position, velocity) the ship senses obstacles only up to `vision`
+    metres ahead, centre-to-centre — a deliberate POMDP solved with tabular
+    Q-Learning over a discretised look-ahead sensor.
+
+    Obstacles (all width 0.5):
+      • spaceship debris — length 1.0, fall speed 2, 1 shot to destroy, −10 on hit
+      • asteroid         — length 0.5, fall speed 1, 2 shots to destroy, −20 on hit
+    """
 
     NAME = "Room 5 · The Space Escape"
     MOVIE = "Star Wars (1977)"
     ALGO = "Tabular Q-Learning over a partial-observation sensor"
     DT = 0.02
-    V_OBS = -5.0            # obstacle downward speed
-    OBS_WIDTH = 0.5        # obstacle width == collision radius (centre-to-centre)
-    AGENT_Y = 2.0
-    D_BINS = 10            # discretisation of the distance sensor
+    AGENT_Y = 1.5
+    MAX_OBSTACLES = 5
+    N_SHOTS = 4
+    OBS_WIDTH = 0.5
+    COLLIDE_DX = 0.5           # |Δx| for an obstacle to hit the ship
+    SHOT_DX = 0.5             # |Δx| leniency for a laser to connect
+    DESTROY_REWARD = 50.0
+    TYPES = {                 # length, fall speed, hit-points (shots to kill), collision reward
+        "debris":   dict(length=1.0, speed=2.0, hp=1, collide=-10.0),
+        "asteroid": dict(length=0.5, speed=1.0, hp=2, collide=-20.0),
+    }
 
-    def __init__(self, vision=3.0, spawn_every=15, v_max=5.0,
-                 max_steps=500, seed=None):
+    def __init__(self, vision=3.0, spawn_every=15, v_max=3.0,
+                 max_steps=500, seed=None, speed_mult=1.0, debris_prob=0.5):
         self.vision = float(vision)
         self.spawn_every = int(spawn_every)
         self.v_max = float(v_max)
         self.max_steps = int(max_steps)
+        self.speed_mult = float(speed_mult)   # global fall-speed scale (random rooms vary it)
+        self.debris_prob = float(debris_prob) # P(debris) vs asteroid at spawn
         self.rng = np.random.default_rng(seed)
-        self.n_actions = 3                                   # ax in {-1, 0, 1}
-        self.actions = [0, 1, 2]
+        self.n_actions = 4                    # 0 left · 1 stay · 2 right · 3 shoot
+        self.actions = [0, 1, 2, 3]
         self._survived = False
         self.reset()
 
     def reset(self):
         self.X = 5.0
         self.Vx = 0.0
-        self.obstacles = []                                  # list of [x, y]
+        self.obstacles = []                   # dicts: x, y(centre), type, hp
+        self.shots = self.N_SHOTS
         self.t = 0
+        self.collisions = 0
+        self.destroyed = 0
         self._survived = False
         return self._obs()
 
@@ -1084,63 +1106,103 @@ class Room5SpaceEscape:
         return self.reset()
 
     def _spawn(self):
-        self.obstacles.append([float(self.rng.uniform(1.0, 9.0)), 10.0])
+        if len(self.obstacles) >= self.MAX_OBSTACLES:
+            return
+        kind = "debris" if self.rng.random() < self.debris_prob else "asteroid"
+        self.obstacles.append(dict(x=float(self.rng.uniform(0.5, 9.5)), y=10.0,
+                                   type=kind, hp=self.TYPES[kind]["hp"]))
+
+    # ---- shooting -------------------------------------------------------- #
+    def _shoot(self):
+        """Damage the nearest column-aligned obstacle; +DESTROY_REWARD if it dies.
+        A shot is spent only when it actually connects."""
+        if self.shots <= 0:
+            return 0.0
+        target, best_dy = None, np.inf
+        for o in self.obstacles:
+            dy = o["y"] - self.AGENT_Y
+            if dy > 0.0 and abs(o["x"] - self.X) <= self.SHOT_DX and dy < best_dy:
+                best_dy, target = dy, o
+        if target is None:
+            return 0.0                        # dry fire — nothing aligned, no shot spent
+        self.shots -= 1
+        target["hp"] -= 1
+        if target["hp"] <= 0:
+            self.obstacles.remove(target)
+            self.destroyed += 1
+            return self.DESTROY_REWARD
+        return 0.0
+
+    # ---- discretised look-ahead sensor ----------------------------------- #
+    def _lane(self, lo, hi):
+        """Nearest obstacle whose Δx is in [lo,hi) and within `vision` ahead:
+        0 clear · 1 wall (off-board) · 2/3 debris far/near · 4/5 asteroid far/near."""
+        if self.X + (lo + hi) / 2.0 < 0.0 or self.X + (lo + hi) / 2.0 > 10.0:
+            return 1
+        best_dy, best_type = None, None
+        for o in self.obstacles:
+            if lo <= (o["x"] - self.X) < hi:
+                dy = o["y"] - self.AGENT_Y
+                if 0.0 <= dy <= self.vision and (best_dy is None or dy < best_dy):
+                    best_dy, best_type = dy, o["type"]
+        if best_dy is None:
+            return 0
+        near = best_dy < self.vision * 0.5
+        if best_type == "debris":
+            return 3 if near else 2
+        return 5 if near else 4
 
     def _obs(self):
-        """Sensor = [Vx, d].  d = vertical gap to the nearest obstacle that is
-        above the agent AND horizontally aligned (|dx| <= width), if that gap
-        is within `vision`; otherwise -1."""
-        best = -1.0
-        best_d = np.inf
-        for ox, oy in self.obstacles:
-            if oy >= self.AGENT_Y and abs(ox - self.X) <= self.OBS_WIDTH:
-                d = oy - self.AGENT_Y
-                if d <= self.vision and d < best_d:
-                    best_d, best = d, d
-        return np.array([self.Vx, best], dtype=float)
+        vx = 0 if abs(self.Vx) < 0.5 else (1 if self.Vx > 0 else 2)
+        return (vx, int(self.shots),
+                self._lane(-1.5, -0.5), self._lane(-0.5, 0.5), self._lane(0.5, 1.5))
 
     def encode(self, obs):
-        """Map the continuous observation onto a discrete (vx, d) tabular state."""
-        vx, d = obs
-        vx_idx = int(round(vx)) + int(self.v_max)            # 0 .. 2*v_max
-        if d < 0:
-            d_idx = 0                                        # "clear ahead"
-        else:
-            frac = min(0.999999, d / max(self.vision, 1e-9))
-            d_idx = 1 + int(frac * self.D_BINS)              # 1 .. D_BINS
-        return (vx_idx, d_idx)
+        return tuple(obs)                     # the sensor is already discrete
 
     def step(self, a):
-        accel = a - 1                                        # {0,1,2} -> {-1,0,1}
-        self.Vx = float(np.clip(self.Vx + accel, -self.v_max, self.v_max))
+        reward = 0.0
+        if a == 3:
+            reward += self._shoot()
+        else:
+            self.Vx = float(np.clip(self.Vx + (a - 1), -self.v_max, self.v_max))
         self.X = float(np.clip(self.X + self.Vx * self.DT, 0.0, 10.0))
 
-        for o in self.obstacles:                             # fall
-            o[1] += self.V_OBS * self.DT
-        self.obstacles = [o for o in self.obstacles if o[1] > -1.0]
-        if self.t % self.spawn_every == 0:                   # dynamic spawn
+        for o in self.obstacles:              # fall (per-type speed × room scale)
+            o["y"] -= self.TYPES[o["type"]]["speed"] * self.speed_mult * self.DT
+
+        survivors = []                        # collisions with the ship
+        for o in self.obstacles:
+            half = self.TYPES[o["type"]]["length"] / 2.0
+            if (abs(o["x"] - self.X) <= self.COLLIDE_DX
+                    and (o["y"] - half) <= self.AGENT_Y <= (o["y"] + half)):
+                reward += self.TYPES[o["type"]]["collide"]
+                self.collisions += 1          # obstacle consumed on impact
+            elif o["y"] > -1.0:
+                survivors.append(o)
+        self.obstacles = survivors
+
+        if self.t % self.spawn_every == 0:    # dynamic spawn (up to MAX at once)
             self._spawn()
         self.t += 1
 
-        for ox, oy in self.obstacles:                        # collision
-            if np.hypot(self.X - ox, self.AGENT_Y - oy) < self.OBS_WIDTH:
-                return self._obs(), -1000.0, True
         if self.t >= self.max_steps:
             self._survived = True
-            return self._obs(), 1.0, True                    # escaped
-        return self._obs(), 1.0, False
+            return self._obs(), reward, True
+        return self._obs(), reward, False
 
     def is_success(self):
-        return self._survived
+        # "escaped" = survived the full S seconds WITHOUT a single collision
+        return self._survived and self.collisions == 0
 
     def render_frame(self):
-        return {"agent": (self.X, self.AGENT_Y),
-                "obstacles": [(ox, oy) for ox, oy in self.obstacles]}
+        return {"agent": (self.X, self.AGENT_Y), "shots": self.shots,
+                "obstacles": [(o["x"], o["y"], o["type"], o["hp"]) for o in self.obstacles]}
 
     def render_meta(self):
         return dict(kind="space", bounds=(0.0, 10.0, 0.0, 10.0),
                     agent_y=self.AGENT_Y, obs_width=self.OBS_WIDTH,
-                    vision=self.vision)
+                    vision=self.vision, n_shots=self.N_SHOTS)
 
 
 # --------------------------------------------------------------------------- #

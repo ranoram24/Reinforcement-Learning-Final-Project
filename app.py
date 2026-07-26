@@ -13,6 +13,7 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import numpy as np
 import streamlit as st
 
 import algorithms as A
@@ -58,8 +59,9 @@ ROOMS = {
                        "finishing pays +1000/total_time, so a faster drift scores higher."),
     "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
                   movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
-                  plot="Hezki flies an escape pod. Agent J fires neuralyzer-drones. "
-                       "Hezki only senses what's right in front of him — dodge or be erased."),
+                  plot="Hezki flies an escape pod through a debris field — 🛰️ debris and ☄️ "
+                       "asteroids rain down (random spot & type, up to 5 at once). He dodges on the "
+                       "X axis and has 4 laser shots (+50 a kill), but only senses X metres ahead."),
 }
 ORDER = ["room1", "room2", "room3", "room4", "room5"]
 
@@ -210,19 +212,23 @@ def sidebar():
                            "road on a distance-to-finish reward route; wall −10/step; finish "
                            "+1000/total_time. Needs ≥~1,500 max-steps to reach the finish; ~1-2 min.")
     else:  # room5
-        p["vision"] = st.sidebar.slider("👁️ vision range X_obs (m)", 0.5, 8.0, 3.0, 0.5, key="v5")
-        p["spawn_every"] = st.sidebar.slider("drone spawn every N steps", 5, 60, 15, 1, key="sp5")
+        p["vision"] = st.sidebar.slider("👁️ vision — X metres seen ahead", 0.5, 8.0, 3.0, 0.5, key="v5")
+        p["spawn_every"] = st.sidebar.slider("obstacle spawn every N steps", 5, 60, 15, 1, key="sp5")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key="a5")
         p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.95, 0.001, key="g5")
         p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
                                            0.0, 0.05, 0.0004, 0.0001, format="%.4f", key="ed5")
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key="em5")
-        p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 3000, 100, key="ep5")
+        p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 5000, 100, key="ep5")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
         with st.sidebar.expander("Physics"):
-            p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 5.0, 0.5, key="vm5")
-            p["max_steps"] = st.number_input("max steps (survival cap)", 0, 3000, 500, 1, key="ms5")
+            p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm5")
+            p["max_steps"] = st.number_input("survive steps (S = steps × 0.02 s)",
+                                             0, 3000, 500, 50, key="ms5")
+        st.sidebar.caption("🚀 Survive S seconds dodging falling debris 🛰️ (−10) & asteroids ☄️ (−20); "
+                           "4 laser shots destroy a column-aligned obstacle (+50 each; asteroids need "
+                           "2). Senses obstacles only X m ahead. 'Escaped' = a full run with 0 hits.")
 
     if st.sidebar.button("🎲 Randomize hyperparameters", use_container_width=True):
         st.session_state["_randhp"] = key
@@ -234,9 +240,12 @@ def sidebar():
 
     random_clicked = False
     if key == "room5":
+        trained = key in store()
         random_clicked = st.sidebar.button("🎲 Generate Random Room & Test Policy",
-                                           use_container_width=True,
-                                           disabled=key not in store())
+                                           use_container_width=True, disabled=not trained,
+                                           help=None if trained else "Train Room 5 first.")
+        st.sidebar.caption("Spawns ONE random room (random speeds, type-mix & survival time) and "
+                           "runs the trained policy through it — see the **🎲 Policy Test** tab.")
     return key, p, train_clicked, random_clicked
 
 
@@ -305,7 +314,8 @@ def train(key, p):
 # Rendering helpers
 # --------------------------------------------------------------------------- #
 def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
-               trail=None, fill=False, mask=0, chaser=None, boxes=None, door_open=False):
+               trail=None, fill=False, mask=0, chaser=None, boxes=None, door_open=False,
+               shots=None):
     theme = U.ROOM_THEME[key]
     if meta.get("kind") == "sokoban":
         return U.render_sokoban_html(meta, theme, agent=agent, boxes=boxes,
@@ -316,7 +326,7 @@ def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
         return U.render_grid_html(meta, theme, agent=agent, policy=policy,
                                   fill=fill, mask=mask, chaser=chaser)
     return U.render_space_svg(meta, theme, agent=agent, obstacles=obstacles,
-                              vision=vision, trail=trail, fill=fill)
+                              vision=vision, trail=trail, fill=fill, shots=shots)
 
 
 def legend_html(key, meta):
@@ -365,7 +375,8 @@ def render_frames(key, entry, roll, cap=320):
         frames = [frames[int(round(i * step))] for i in range(cap)]
     return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"),
                        vision=vision, mask=f.get("mask", 0), chaser=f.get("chaser"),
-                       boxes=f.get("boxes"), door_open=f.get("door_open", False))
+                       boxes=f.get("boxes"), door_open=f.get("door_open", False),
+                       shots=f.get("shots"))
             for f in frames]
 
 
@@ -461,9 +472,13 @@ def tab_charts(key, entry):
         c2.plotly_chart(U.length_curve(res["lengths"], window=50,
                         title="Episode duration (moving avg)"), use_container_width=True)
     else:  # room5
-        st.plotly_chart(U.length_curve(res["lengths"], window=50,
-                        title="Survival time per episode", ylab="Steps survived"),
-                        use_container_width=True)
+        succ = res.get("successes", [])
+        n, total = len(succ), int(sum(succ))
+        if n:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("🏆 Clean escapes (0 hits)", f"{total:,}")
+            m2.metric("❌ Episodes with a hit", f"{n - total:,}")
+            m3.metric("🎯 Clean-escape rate", f"{100 * total / n:.1f}%")
         st.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
 
 
@@ -644,15 +659,6 @@ def tab_replay(key, entry, random_clicked):
     embed(legend_html(key, entry["meta"]), height=LEGEND_H)
     board_h = (GRID_H if is_grid else SPACE_H) + 130
 
-    if key == "room5" and random_clicked:
-        seed = int(st.session_state.get("rand_seed", 0)) + 1
-        st.session_state["rand_seed"] = seed
-        roll = eval_roll(key, entry, entry["final_policy"], seed=1000 + seed)
-        st.caption(f"🎲 Random test room (seed {seed}) · final policy · "
-                   f"{'survived ✅' if roll['success'] else 'hit a drone ❌'} — {roll['steps']} steps")
-        embed(U.render_player(render_frames(key, entry, roll), delay_ms=70), height=board_h)
-        return
-
     eps = episode_list(key, entry)
     if not eps:
         st.info("No episodes were recorded for this run.")
@@ -718,6 +724,53 @@ def default_params(key):
                 hard_walls=False, vision=3.0, spawn_every=15)
 
 
+def tab_policy_test(key, entry, run_now):
+    """Room 5 only — run the trained policy through ONE freshly generated random
+    room (random fall-speeds, type-mix and survival time) and show the result."""
+    if not entry:
+        st.info("Train Room 5 first, then generate a random room to test the policy here.")
+        return
+    STORE = "r5_policy_test"
+    if run_now:
+        seed = int(st.session_state.get("r5_seed", 0)) + 1
+        st.session_state["r5_seed"] = seed
+        rng = np.random.default_rng(1234 + seed)
+        tp = entry["params"]
+        env = E.Room5SpaceEscape(
+            vision=tp.get("vision", 3.0), v_max=tp.get("v_max", 3.0),   # agent kept as trained
+            spawn_every=int(rng.integers(8, 26)),                       # random density
+            max_steps=int(rng.integers(300, 701)),                      # random survival time S
+            speed_mult=float(round(rng.uniform(0.8, 1.4), 2)),          # random fall speed
+            debris_prob=float(round(rng.uniform(0.3, 0.7), 2)),         # random type mix
+            seed=1234 + seed)
+        roll = A.rollout(env, entry["final_policy"], max_steps=env.max_steps)
+        st.session_state[STORE] = dict(
+            frames=render_frames(key, entry, roll), reward=roll["reward"],
+            steps=roll["steps"], collisions=env.collisions, destroyed=env.destroyed,
+            shots_used=env.N_SHOTS - env.shots, survived=bool(env._survived),
+            cfg=dict(spawn_every=env.spawn_every, seconds=round(env.max_steps * env.DT, 1),
+                     speed_mult=env.speed_mult, debris_prob=env.debris_prob))
+
+    res = st.session_state.get(STORE)
+    if not res:
+        st.info("Click **🎲 Generate Random Room & Test Policy** in the sidebar to spawn one "
+                "random room and run the trained policy through it.")
+        return
+    cfg = res["cfg"]
+    st.markdown(f"### 🎲 One random room  ·  survive **{cfg['seconds']} s**")
+    st.caption(f"spawn every **{cfg['spawn_every']}** steps · fall-speed **×{cfg['speed_mult']}** · "
+               f"mix **{int(cfg['debris_prob']*100)}% debris / {int((1-cfg['debris_prob'])*100)}% "
+               f"asteroid** — a fresh environment the policy never trained on.")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("🎯 Reward", f"{res['reward']:.0f}")
+    m2.metric("💥 Collisions", res["collisions"])
+    m3.metric("🔴 Destroyed", f"{res['destroyed']}  ({res['shots_used']}/4 shots)")
+    m4.metric("Outcome", "clean ✅" if (res["survived"] and res["collisions"] == 0)
+              else ("survived" if res["survived"] else "ended early"))
+    st.caption("Replay of this one generated room:")
+    embed(U.render_player(res["frames"], delay_ms=70, caption=None), height=SPACE_H + 70)
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -731,6 +784,8 @@ def main():
     if train_clicked:
         with st.spinner("Hezki is learning…"):
             train(key, p)
+        st.rerun()      # redraw the sidebar so post-training controls (e.g. the Room 5
+                        # random-room test button) enable immediately
 
     entry = store().get(key)
     if entry:
@@ -740,13 +795,19 @@ def main():
                    "still reflects the **previous** run — click **🚀 Train** to apply the new "
                    "settings.", icon="⚠️")
 
-    t1, t2, t3 = st.tabs(["🎬 Room Simulation (HTML)", "📈 Training Metrics", "⏪ Episode Replay"])
-    with t1:
+    labels = ["🎬 Room Simulation (HTML)", "📈 Training Metrics", "⏪ Episode Replay"]
+    if key == "room5":
+        labels.append("🎲 Policy Test")
+    tabs = st.tabs(labels)
+    with tabs[0]:
         tab_simulation(key, entry)
-    with t2:
+    with tabs[1]:
         tab_charts(key, entry)
-    with t3:
-        tab_replay(key, entry, random_clicked)
+    with tabs[2]:
+        tab_replay(key, entry, random_clicked=False)
+    if key == "room5":
+        with tabs[3]:
+            tab_policy_test(key, entry, random_clicked)
 
 
 if __name__ == "__main__":

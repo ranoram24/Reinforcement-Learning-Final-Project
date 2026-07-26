@@ -67,7 +67,8 @@ THEMES = {
         car="🏎️", agent="🏎️", exit="🏁", start="🟣", finish="🏁"),
     "space": dict(  # Star Wars
         movie="Star Wars", board="#02030a", grid="#0b1030",
-        accent="#eab308", drone="🛸", agent="🚀"),
+        accent="#eab308", drone="🛸", agent="🚀",
+        debris="🛰️", asteroid="☄️", laser="🔴"),
 }
 
 ROOM_THEME = {"room1": "ice", "room2": "matrix", "room3": "temple",
@@ -336,8 +337,10 @@ def render_legend(theme, meta):
                       (T["exit"], "finish · +1000 / total time"),
                       ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
-            chips += [(T["drone"], "drone · hit −1000"), ("👁️", "vision (sensor)"),
-                      ("✅", "survive · +1 / step")]
+            chips += [(T.get("debris", "🛰️"), "debris · −10, 1 shot"),
+                      (T.get("asteroid", "☄️"), "asteroid · −20, 2 shots"),
+                      (T.get("laser", "🔴"), "shot · destroy = +50 (4 total)"),
+                      ("👁️", "look-ahead sensor")]
     elif meta.get("kind") == "sokoban":                     # box-pushing room
         chips += [
             (T["box"], "box · push onto a plate"),
@@ -469,7 +472,7 @@ def render_track_svg(meta, theme, agent=None, trail=None, scale=44, pad=14, fill
 
 
 def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
-                     trail=None, scale=44, pad=14, fill=False):
+                     trail=None, scale=44, pad=14, fill=False, shots=None):
     T = THEMES[theme]
     span = 10.0
     W = int(span * scale + 2 * pad)
@@ -508,15 +511,29 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
         p.append(f"<text x='{px((ex+span)/2)}' y='{py((ey+span)/2)+8}' font-size='26' "
                  f"text-anchor='middle'>{T['exit']}</text>")
     else:  # space
-        ay = meta.get("agent_y", 2.0)
-        if vision:
-            ax = agent[0] if agent else 5.0
-            w = meta.get("obs_width", 0.5)
-            p.append(f"<rect x='{px(ax-w)}' y='{py(ay+vision)}' width='{2*w*scale}' "
-                     f"height='{vision*scale}' fill='{T['accent']}' opacity='.16'/>")
-        for (ox, oy) in (obstacles or []):
-            p.append(f"<text x='{px(ox)}' y='{py(oy)+8}' font-size='24' "
-                     f"text-anchor='middle'>{T['drone']}</text>")
+        ay = meta.get("agent_y", 1.5)
+        ax = agent[0] if agent else 5.0
+        if vision:                                             # look-ahead sensor band (±1.5 lanes)
+            x0 = max(0.0, ax - 1.5)
+            x1 = min(span, ax + 1.5)
+            p.append(f"<rect x='{px(x0)}' y='{py(ay+vision)}' width='{(x1-x0)*scale}' "
+                     f"height='{vision*scale}' fill='{T['accent']}' opacity='.12'/>")
+            p.append(f"<line x1='{px(x0)}' y1='{py(ay)}' x2='{px(x1)}' y2='{py(ay)}' "
+                     f"stroke='{T['accent']}' stroke-opacity='.4' stroke-dasharray='4 4'/>")
+        for ob in (obstacles or []):
+            ox, oy = ob[0], ob[1]
+            otype = ob[2] if len(ob) > 2 else "debris"
+            emo = T.get("asteroid", "☄️") if otype == "asteroid" else T.get("debris", "🛰️")
+            fs = 26 if otype == "debris" else 22
+            p.append(f"<text x='{px(ox)}' y='{py(oy)+8}' font-size='{fs}' "
+                     f"text-anchor='middle'>{emo}</text>")
+            if otype == "asteroid" and len(ob) > 3 and ob[3] >= 2:   # 2-hp asteroid marker
+                p.append(f"<circle cx='{px(ox)}' cy='{py(oy)}' r='{0.34*scale:.0f}' "
+                         f"fill='none' stroke='#f87171' stroke-width='2' opacity='.7'/>")
+        if shots is not None:                                  # ammo readout
+            bolts = "".join(T.get("laser", "🔴") for _ in range(int(shots)))
+            p.append(f"<text x='{pad+6}' y='{pad+20}' font-size='15' fill='#e5e7eb' "
+                     f"text-anchor='start'>shots: {bolts or '—'}</text>")
 
     if trail:
         pts = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in trail)

@@ -322,30 +322,43 @@ def test_tilecoder_shapes():
 # --------------------------------------------------------------------------- #
 # Room 5 — partial observability + dynamic obstacles
 # --------------------------------------------------------------------------- #
-def test_room5_sensor_and_collision():
+def test_room5_sensor_lanes_and_wall():
     env = E.Room5SpaceEscape(vision=3.0, seed=0)
-    env.reset()
-    env.obstacles = []
-    assert env._obs()[1] == -1.0                           # nothing in range → -1
+    env.reset(); env._spawn = lambda: None
+    env.X = 5.0; env.obstacles = []
+    obs = env._obs()
+    assert isinstance(obs, tuple) and obs[2:] == (0, 0, 0)          # all lanes clear
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 1.0, type="debris", hp=1)]
+    assert env._obs()[3] in (2, 3)                                  # centre lane sees debris
+    env.obstacles = [dict(x=6.0, y=env.AGENT_Y + 1.0, type="asteroid", hp=2)]
+    assert env._obs()[4] in (4, 5)                                  # right lane sees asteroid
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 7.0, type="debris", hp=1)]
+    assert env._obs()[3] == 0                                       # beyond vision → clear
+    env.X = 0.2
+    assert env._obs()[2] == 1                                       # left lane off-board → wall
+
+
+def test_room5_collision_penalises_but_continues():
+    env = E.Room5SpaceEscape(vision=3.0, seed=0)
+    env.reset(); env._spawn = lambda: None
     env.X = 5.0
-    env.obstacles = [[5.0, 4.0]]                            # aligned, 2 m above, within vision
-    d = env._obs()[1]
-    assert abs(d - 2.0) < 1e-9
-    env.obstacles = [[5.0, 9.0]]                            # aligned but beyond vision (7 m)
-    assert env._obs()[1] == -1.0
-    env.obstacles = [[9.0, 4.0]]                            # in range but not aligned
-    assert env._obs()[1] == -1.0
-    # collision within 0.5 m centre-to-centre → -1000 terminal
-    env.reset(); env.X = 5.0; env.obstacles = [[5.0, 2.05]]
-    _, r, done = env.step(1)                                # action 1 == 0 accel
-    assert done and r == -1000.0
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y, type="asteroid", hp=2)]
+    _, r, done = env.step(1)                                        # stay → asteroid hits
+    assert r == -20.0 and not done and env.collisions == 1         # penalty, episode continues
 
 
-def test_room5_encode_discrete():
-    env = E.Room5SpaceEscape(vision=3.0)
-    a = env.encode(np.array([0.0, -1.0]))                   # clear ahead
-    b = env.encode(np.array([0.0, 0.1]))                    # very close obstacle
-    assert a[1] == 0 and b[1] >= 1 and isinstance(a, tuple)
+def test_room5_shooting_debris_and_asteroid():
+    env = E.Room5SpaceEscape(vision=3.0, seed=0)
+    env.reset(); env._spawn = lambda: None; env.X = 5.0
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="debris", hp=1)]
+    _, r, _ = env.step(3)                                           # one shot destroys debris
+    assert r == env.DESTROY_REWARD and env.shots == env.N_SHOTS - 1 and not env.obstacles
+    env.reset(); env._spawn = lambda: None; env.X = 5.0
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="asteroid", hp=2)]
+    _, r1, _ = env.step(3)                                          # asteroid needs TWO shots
+    assert r1 == 0.0 and env.obstacles[0]["hp"] == 1 and env.shots == env.N_SHOTS - 1
+    _, r2, _ = env.step(3)
+    assert r2 == env.DESTROY_REWARD and not env.obstacles
 
 
 # --------------------------------------------------------------------------- #
