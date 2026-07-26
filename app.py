@@ -59,9 +59,9 @@ ROOMS = {
                        "finishing pays +1000/total_time, so a faster drift scores higher."),
     "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
                   movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
-                  plot="Hezki flies an escape pod through a debris field — 🛰️ debris and ☄️ "
-                       "asteroids rain down (random spot & type, up to 5 at once). He dodges on the "
-                       "X axis and has 4 laser shots (+50 a kill), but only senses X metres ahead."),
+                  plot="Hezki flies an escape pod through a debris field — 🛰️ debris (fast, drifting) "
+                       "and ☄️ asteroids rain down (random spot & type, up to 5 at once). He dodges on "
+                       "the X axis and has 4 laser shots (+30 a kill), but only senses X metres ahead."),
 }
 ORDER = ["room1", "room2", "room3", "room4", "room5"]
 
@@ -226,9 +226,10 @@ def sidebar():
             p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm5")
             p["max_steps"] = st.number_input("survive steps (S = steps × 0.02 s)",
                                              0, 3000, 500, 50, key="ms5")
-        st.sidebar.caption("🚀 Survive S seconds dodging falling debris 🛰️ (−10) & asteroids ☄️ (−20); "
-                           "4 laser shots destroy a column-aligned obstacle (+50 each; asteroids need "
-                           "2). Senses obstacles only X m ahead. 'Escaped' = a full run with 0 hits.")
+        st.sidebar.caption("🚀 Survive S seconds dodging fast, drifting debris 🛰️ (−25) & asteroids "
+                           "☄️ (−15); 4 laser shots (5-step cooldown) destroy a column-aligned "
+                           "obstacle in view (+30 each; asteroids need 2). Senses obstacles only "
+                           "X m ahead; hugging a wall costs −5/step. 'Escaped' = a run with 0 hits.")
 
     if st.sidebar.button("🎲 Randomize hyperparameters", use_container_width=True):
         st.session_state["_randhp"] = key
@@ -315,7 +316,7 @@ def train(key, p):
 # --------------------------------------------------------------------------- #
 def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
                trail=None, fill=False, mask=0, chaser=None, boxes=None, door_open=False,
-               shots=None):
+               shots=None, fired=False, cooldown=0, collisions=None):
     theme = U.ROOM_THEME[key]
     if meta.get("kind") == "sokoban":
         return U.render_sokoban_html(meta, theme, agent=agent, boxes=boxes,
@@ -326,7 +327,8 @@ def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
         return U.render_grid_html(meta, theme, agent=agent, policy=policy,
                                   fill=fill, mask=mask, chaser=chaser)
     return U.render_space_svg(meta, theme, agent=agent, obstacles=obstacles,
-                              vision=vision, trail=trail, fill=fill, shots=shots)
+                              vision=vision, trail=trail, fill=fill, shots=shots,
+                              fired=fired, cooldown=cooldown, collisions=collisions)
 
 
 def legend_html(key, meta):
@@ -376,7 +378,8 @@ def render_frames(key, entry, roll, cap=320):
     return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"),
                        vision=vision, mask=f.get("mask", 0), chaser=f.get("chaser"),
                        boxes=f.get("boxes"), door_open=f.get("door_open", False),
-                       shots=f.get("shots"))
+                       shots=f.get("shots"), fired=f.get("fired", False),
+                       cooldown=f.get("cooldown", 0), collisions=f.get("collisions"))
             for f in frames]
 
 
@@ -672,19 +675,25 @@ def tab_replay(key, entry, random_clicked):
                "Hezki can only choose *legal* moves (walls are removed from his actions), "
                "so if he stays put he **slipped** on ice.")
 
+    def ep_hits(e):
+        fr = e.get("frames") or []
+        return int(fr[-1].get("collisions", 0)) if fr else 0
+
     def label(i):
         e = eps[i]
         tick = "✅" if e["success"] else "❌"
+        extra = f"   ·   💥 {ep_hits(e)} hits" if key == "room5" else ""
         return (f"{tick}  discounted reward {e['ret']:>8.0f}   ·   "
-                f"total reward {e['reward']:>8.0f}   ·   {e['steps']:>4d} steps   ·   #{e['episode']}")
+                f"total reward {e['reward']:>8.0f}   ·   {e['steps']:>4d} steps{extra}   ·   #{e['episode']}")
 
     idx = st.selectbox("Episode", range(len(eps)), format_func=label,
                        key=f"epsel_{key}")
     ep = eps[idx]
+    hits_note = f" · 💥 **{ep_hits(ep)} hits** this episode" if key == "room5" else ""
     st.caption(f"Episode **#{ep['episode']}** · "
                f"discounted reward Σγᵗrₜ = **{ep['ret']:.0f}** (γ = {gamma:g}) · "
                f"total reward (without discount) Σrₜ = **{ep['reward']:.0f}** · "
-               f"{ep['steps']} steps · {'escaped ✅' if ep['success'] else 'did not escape ❌'}")
+               f"{ep['steps']} steps · {'escaped ✅' if ep['success'] else 'did not escape ❌'}{hits_note}")
     # token changes with the selection, so the player remounts and restarts
     token = f"{key}-{idx}-{ep['episode']}"
     sokoban = entry["meta"].get("kind") == "sokoban"      # boxes move → full-frame player

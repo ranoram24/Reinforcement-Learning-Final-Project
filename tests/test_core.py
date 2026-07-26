@@ -326,16 +326,17 @@ def test_room5_sensor_lanes_and_wall():
     env = E.Room5SpaceEscape(vision=3.0, seed=0)
     env.reset(); env._spawn = lambda: None
     env.X = 5.0; env.obstacles = []
-    obs = env._obs()
-    assert isinstance(obs, tuple) and obs[2:] == (0, 0, 0)          # all lanes clear
+    obs = env._obs()                                                # (vx, shots, ready, L, C, R)
+    assert isinstance(obs, tuple) and obs[3:] == (0, 0, 0)          # all lanes clear
+    assert obs[2] == 1                                              # ready to shoot at start
     env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 1.0, type="debris", hp=1)]
-    assert env._obs()[3] in (2, 3)                                  # centre lane sees debris
+    assert env._obs()[4] in (2, 3)                                  # centre lane sees debris
     env.obstacles = [dict(x=6.0, y=env.AGENT_Y + 1.0, type="asteroid", hp=2)]
-    assert env._obs()[4] in (4, 5)                                  # right lane sees asteroid
+    assert env._obs()[5] in (4, 5)                                  # right lane sees asteroid
     env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 7.0, type="debris", hp=1)]
-    assert env._obs()[3] == 0                                       # beyond vision → clear
+    assert env._obs()[4] == 0                                       # beyond vision → clear
     env.X = 0.2
-    assert env._obs()[2] == 1                                       # left lane off-board → wall
+    assert env._obs()[3] == 1                                       # left lane off-board → wall
 
 
 def test_room5_collision_penalises_but_continues():
@@ -344,21 +345,41 @@ def test_room5_collision_penalises_but_continues():
     env.X = 5.0
     env.obstacles = [dict(x=5.0, y=env.AGENT_Y, type="asteroid", hp=2)]
     _, r, done = env.step(1)                                        # stay → asteroid hits
-    assert r == -20.0 and not done and env.collisions == 1         # penalty, episode continues
+    assert r == -15.0 and not done and env.collisions == 1         # penalty, episode continues
 
 
-def test_room5_shooting_debris_and_asteroid():
+def test_room5_shooting_cooldown_and_types():
     env = E.Room5SpaceEscape(vision=3.0, seed=0)
     env.reset(); env._spawn = lambda: None; env.X = 5.0
     env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="debris", hp=1)]
     _, r, _ = env.step(3)                                           # one shot destroys debris
     assert r == env.DESTROY_REWARD and env.shots == env.N_SHOTS - 1 and not env.obstacles
+    assert env.cooldown == env.SHOT_COOLDOWN                        # cooldown started
+    # asteroid needs TWO shots, and the second must wait out the cooldown
     env.reset(); env._spawn = lambda: None; env.X = 5.0
     env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="asteroid", hp=2)]
-    _, r1, _ = env.step(3)                                          # asteroid needs TWO shots
+    _, r1, _ = env.step(3)                                          # 1st shot: damage only
     assert r1 == 0.0 and env.obstacles[0]["hp"] == 1 and env.shots == env.N_SHOTS - 1
-    _, r2, _ = env.step(3)
+    _, r_cd, _ = env.step(3)                                        # on cooldown → no-op
+    assert r_cd == 0.0 and env.obstacles[0]["hp"] == 1 and env.shots == env.N_SHOTS - 1
+    for _ in range(env.SHOT_COOLDOWN - 1):                          # wait out the rest of it
+        env.step(1)
+    env.obstacles[0]["x"] = env.X; env.obstacles[0]["y"] = env.AGENT_Y + 2.0
+    _, r2, _ = env.step(3)                                          # 2nd shot: destroy
     assert r2 == env.DESTROY_REWARD and not env.obstacles
+
+
+def test_room5_edge_penalty_and_shot_visibility():
+    env = E.Room5SpaceEscape(vision=3.0, seed=0)
+    env.reset(); env._spawn = lambda: None
+    env.X = 0.2; env.Vx = 0.0; env.obstacles = []
+    _, r, _ = env.step(1)                                           # hugging the left wall
+    assert r == env.EDGE_PENALTY
+    # a shot can't destroy an obstacle beyond the ship's vision
+    env.reset(); env._spawn = lambda: None; env.X = 5.0
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + env.vision + 2.0, type="debris", hp=1)]
+    _, r2, _ = env.step(3)                                          # fire at an unseen obstacle
+    assert r2 == 0.0 and env.obstacles and env.obstacles[0]["hp"] == 1
 
 
 # --------------------------------------------------------------------------- #

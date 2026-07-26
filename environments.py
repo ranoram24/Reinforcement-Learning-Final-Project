@@ -1055,8 +1055,9 @@ class Room5SpaceEscape:
     Q-Learning over a discretised look-ahead sensor.
 
     Obstacles (all width 0.5):
-      • spaceship debris — length 1.0, fall speed 2, 1 shot to destroy, −10 on hit
-      • asteroid         — length 0.5, fall speed 1, 2 shots to destroy, −20 on hit
+      • spaceship debris — fall speed 6, drifts sideways as it falls, 1 shot, −25 on hit
+      • asteroid         — fall speed 3, falls straight,               2 shots, −15 on hit
+    Each shot has a SHOT_COOLDOWN-step cooldown; destroying an obstacle pays +DESTROY_REWARD.
     """
 
     NAME = "Room 5 · The Space Escape"
@@ -1066,13 +1067,17 @@ class Room5SpaceEscape:
     AGENT_Y = 1.5
     MAX_OBSTACLES = 5
     N_SHOTS = 4
+    SHOT_COOLDOWN = 5         # steps the agent must wait between shots
+    DEBRIS_MOVE_PROB = 0.30  # per-step chance a debris also drifts left/right (diagonal fall)
+    EDGE_PENALTY = -5.0      # per-step penalty for hugging a wall
+    EDGE_MARGIN = 0.5        # how close to a wall counts as "hugging the edge"
     OBS_WIDTH = 0.5
     COLLIDE_DX = 0.5           # |Δx| for an obstacle to hit the ship
     SHOT_DX = 0.5             # |Δx| leniency for a laser to connect
-    DESTROY_REWARD = 50.0
+    DESTROY_REWARD = 30.0
     TYPES = {                 # length, fall speed, hit-points (shots to kill), collision reward
-        "debris":   dict(length=1.0, speed=2.0, hp=1, collide=-10.0),
-        "asteroid": dict(length=0.5, speed=1.0, hp=2, collide=-20.0),
+        "debris":   dict(length=0.5, speed=6.0, hp=1, collide=-25.0),
+        "asteroid": dict(length=0.5, speed=3.0, hp=2, collide=-15.0),
     }
 
     def __init__(self, vision=3.0, spawn_every=15, v_max=3.0,
@@ -1094,6 +1099,8 @@ class Room5SpaceEscape:
         self.Vx = 0.0
         self.obstacles = []                   # dicts: x, y(centre), type, hp
         self.shots = self.N_SHOTS
+        self.cooldown = 0                     # steps until the laser can fire again
+        self._fired = False                  # did a shot fire THIS step? (for the viz)
         self.t = 0
         self.collisions = 0
         self.destroyed = 0
@@ -1114,24 +1121,34 @@ class Room5SpaceEscape:
 
     # ---- shooting -------------------------------------------------------- #
     def _shoot(self):
-        """Damage the nearest column-aligned obstacle; +DESTROY_REWARD if it dies.
-        A shot is spent only when it actually connects."""
-        if self.shots <= 0:
-            return 0.0
+        """Fire a laser up the ship's column, if ready (off cooldown + ammo left).
+        Damages the nearest column-aligned obstacle, +DESTROY_REWARD on a kill.
+        Firing spends a shot and starts a SHOT_COOLDOWN-step cooldown."""
+        if self.cooldown > 0 or self.shots <= 0:
+            return 0.0                        # not ready → no shot
+        self.shots -= 1
+        self.cooldown = self.SHOT_COOLDOWN
+        self._fired = True
         target, best_dy = None, np.inf
-        for o in self.obstacles:
+        for o in self.obstacles:                             # only what the ship can SEE
             dy = o["y"] - self.AGENT_Y
-            if dy > 0.0 and abs(o["x"] - self.X) <= self.SHOT_DX and dy < best_dy:
+            if 0.0 < dy <= self.vision and abs(o["x"] - self.X) <= self.SHOT_DX and dy < best_dy:
                 best_dy, target = dy, o
         if target is None:
-            return 0.0                        # dry fire — nothing aligned, no shot spent
-        self.shots -= 1
+            return 0.0                        # missed — laser still spent
         target["hp"] -= 1
         if target["hp"] <= 0:
             self.obstacles.remove(target)
             self.destroyed += 1
             return self.DESTROY_REWARD
         return 0.0
+
+    def _ready(self):
+        return self.cooldown == 0 and self.shots > 0
+
+    def valid_actions(self, obs):
+        """Mask the shoot action while on cooldown / out of ammo (obs[2] = ready)."""
+        return [0, 1, 2, 3] if obs[2] else [0, 1, 2]
 
     # ---- discretised look-ahead sensor ----------------------------------- #
     def _lane(self, lo, hi):
@@ -1154,7 +1171,7 @@ class Room5SpaceEscape:
 
     def _obs(self):
         vx = 0 if abs(self.Vx) < 0.5 else (1 if self.Vx > 0 else 2)
-        return (vx, int(self.shots),
+        return (vx, int(self.shots), int(self._ready()),
                 self._lane(-1.5, -0.5), self._lane(-0.5, 0.5), self._lane(0.5, 1.5))
 
     def encode(self, obs):
@@ -1162,14 +1179,21 @@ class Room5SpaceEscape:
 
     def step(self, a):
         reward = 0.0
+        self._fired = False
         if a == 3:
             reward += self._shoot()
         else:
             self.Vx = float(np.clip(self.Vx + (a - 1), -self.v_max, self.v_max))
         self.X = float(np.clip(self.X + self.Vx * self.DT, 0.0, 10.0))
+        if self.X < self.EDGE_MARGIN or self.X > 10.0 - self.EDGE_MARGIN:
+            reward += self.EDGE_PENALTY       # discourage hugging a wall
 
         for o in self.obstacles:              # fall (per-type speed × room scale)
-            o["y"] -= self.TYPES[o["type"]]["speed"] * self.speed_mult * self.DT
+            fall = self.TYPES[o["type"]]["speed"] * self.speed_mult * self.DT
+            o["y"] -= fall
+            if o["type"] == "debris" and self.rng.random() < self.DEBRIS_MOVE_PROB:
+                drift = fall if self.rng.random() < 0.5 else -fall   # 50/50 left/right
+                o["x"] = float(np.clip(o["x"] + drift, 0.0, 10.0))
 
         survivors = []                        # collisions with the ship
         for o in self.obstacles:
@@ -1185,6 +1209,8 @@ class Room5SpaceEscape:
         if self.t % self.spawn_every == 0:    # dynamic spawn (up to MAX at once)
             self._spawn()
         self.t += 1
+        if not self._fired:                   # tick the shot cooldown down
+            self.cooldown = max(0, self.cooldown - 1)
 
         if self.t >= self.max_steps:
             self._survived = True
@@ -1197,6 +1223,8 @@ class Room5SpaceEscape:
 
     def render_frame(self):
         return {"agent": (self.X, self.AGENT_Y), "shots": self.shots,
+                "fired": self._fired, "cooldown": self.cooldown,
+                "collisions": self.collisions, "destroyed": self.destroyed,
                 "obstacles": [(o["x"], o["y"], o["type"], o["hp"]) for o in self.obstacles]}
 
     def render_meta(self):

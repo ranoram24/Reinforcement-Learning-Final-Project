@@ -337,9 +337,9 @@ def render_legend(theme, meta):
                       (T["exit"], "finish · +1000 / total time"),
                       ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
-            chips += [(T.get("debris", "🛰️"), "debris · −10, 1 shot"),
-                      (T.get("asteroid", "☄️"), "asteroid · −20, 2 shots"),
-                      (T.get("laser", "🔴"), "shot · destroy = +50 (4 total)"),
+            chips += [(T.get("debris", "🛰️"), "debris · −25, fast, drifts, 1 shot"),
+                      (T.get("asteroid", "☄️"), "asteroid · −15, 2 shots"),
+                      (T.get("laser", "🔴"), "shot · destroy = +30 (4 total · 5-step cooldown)"),
                       ("👁️", "look-ahead sensor")]
     elif meta.get("kind") == "sokoban":                     # box-pushing room
         chips += [
@@ -472,7 +472,8 @@ def render_track_svg(meta, theme, agent=None, trail=None, scale=44, pad=14, fill
 
 
 def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
-                     trail=None, scale=44, pad=14, fill=False, shots=None):
+                     trail=None, scale=44, pad=14, fill=False, shots=None,
+                     fired=False, cooldown=0, collisions=None):
     T = THEMES[theme]
     span = 10.0
     W = int(span * scale + 2 * pad)
@@ -513,13 +514,21 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
     else:  # space
         ay = meta.get("agent_y", 1.5)
         ax = agent[0] if agent else 5.0
-        if vision:                                             # look-ahead sensor band (±1.5 lanes)
+        if vision:                                             # look-ahead sensor
             x0 = max(0.0, ax - 1.5)
             x1 = min(span, ax + 1.5)
-            p.append(f"<rect x='{px(x0)}' y='{py(ay+vision)}' width='{(x1-x0)*scale}' "
-                     f"height='{vision*scale}' fill='{T['accent']}' opacity='.12'/>")
-            p.append(f"<line x1='{px(x0)}' y1='{py(ay)}' x2='{px(x1)}' y2='{py(ay)}' "
-                     f"stroke='{T['accent']}' stroke-opacity='.4' stroke-dasharray='4 4'/>")
+            yt, yb = py(ay + vision), py(ay)
+            # faint 3-lane band (fixed width) capped at the VERTICAL vision depth
+            p.append(f"<rect x='{px(x0)}' y='{yt:.1f}' width='{(x1-x0)*scale}' "
+                     f"height='{yb-yt:.1f}' fill='{T['accent']}' opacity='.10'/>")
+            # vertical measure at the ship's column: this is what `vision` controls
+            p.append(f"<line x1='{px(ax):.1f}' y1='{yb:.1f}' x2='{px(ax):.1f}' y2='{yt:.1f}' "
+                     f"stroke='{T['accent']}' stroke-width='2' stroke-dasharray='5 4' opacity='.85'/>")
+            for yy in (yt, yb):                                # end ticks
+                p.append(f"<line x1='{px(ax)-6:.1f}' y1='{yy:.1f}' x2='{px(ax)+6:.1f}' y2='{yy:.1f}' "
+                         f"stroke='{T['accent']}' stroke-width='2' opacity='.85'/>")
+            p.append(f"<text x='{px(ax)+9:.1f}' y='{yt+14:.1f}' font-size='12' "
+                     f"fill='{T['accent']}' text-anchor='start'>👁️ sees {vision:g} m up</text>")
         for ob in (obstacles or []):
             ox, oy = ob[0], ob[1]
             otype = ob[2] if len(ob) > 2 else "debris"
@@ -530,10 +539,22 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
             if otype == "asteroid" and len(ob) > 3 and ob[3] >= 2:   # 2-hp asteroid marker
                 p.append(f"<circle cx='{px(ox)}' cy='{py(oy)}' r='{0.34*scale:.0f}' "
                          f"fill='none' stroke='#f87171' stroke-width='2' opacity='.7'/>")
-        if shots is not None:                                  # ammo readout
+        if fired and agent is not None:                        # laser shot visualization
+            p.append(f"<rect x='{px(ax-0.08):.1f}' y='{pad:.1f}' width='{0.16*scale:.1f}' "
+                     f"height='{py(ay)-pad:.1f}' rx='3' fill='#38bdf8' opacity='.85' "
+                     f"style='filter:drop-shadow(0 0 7px #7dd3fc)'/>")
+            p.append(f"<circle cx='{px(ax):.1f}' cy='{py(ay):.1f}' r='{0.55*scale:.0f}' "
+                     f"fill='none' stroke='#38bdf8' stroke-width='3' opacity='.9' "
+                     f"style='filter:drop-shadow(0 0 9px #38bdf8)'/>")
+        if shots is not None:                                  # ammo + cooldown readout
             bolts = "".join(T.get("laser", "🔴") for _ in range(int(shots)))
+            cd = f"   · cooling {int(cooldown)}" if cooldown else ""
             p.append(f"<text x='{pad+6}' y='{pad+20}' font-size='15' fill='#e5e7eb' "
-                     f"text-anchor='start'>shots: {bolts or '—'}</text>")
+                     f"text-anchor='start'>shots: {bolts or '—'}{cd}</text>")
+        if collisions is not None:                             # running hit counter
+            col = "#f87171" if collisions else "#86efac"
+            p.append(f"<text x='{pad+6}' y='{pad+40}' font-size='15' fill='{col}' "
+                     f"text-anchor='start' font-weight='700'>hits: {int(collisions)}</text>")
 
     if trail:
         pts = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in trail)
