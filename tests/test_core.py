@@ -343,29 +343,46 @@ def test_room5_collision_penalises_but_continues():
     env = E.Room5SpaceEscape(vision=3.0, seed=0)
     env.reset(); env._spawn = lambda: None
     env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y, type="asteroid", hp=2)]
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y, type="asteroid", hp=1)]
     _, r, done = env.step(1)                                        # stay → asteroid hits
     assert r == -15.0 and not done and env.collisions == 1         # penalty, episode continues
+    assert env.health == env.HEALTH - 1                            # cost one health point
 
 
-def test_room5_shooting_cooldown_and_types():
+def test_room5_zero_health_is_terminal_failure():
+    env = E.Room5SpaceEscape(vision=3.0, max_steps=999, seed=0)
+    env.reset(); env._spawn = lambda: None; env.X = 5.0
+    done, last_r = False, 0.0
+    for _ in range(env.HEALTH):                                     # take HEALTH hits in a row
+        env.obstacles = [dict(x=env.X, y=env.AGENT_Y, type="asteroid", hp=1)]
+        _, last_r, done = env.step(1)
+    assert env.health == 0 and env.collisions == env.HEALTH
+    assert done and last_r <= env.DEATH_REWARD and not env.is_success()   # terminal −100
+
+
+def test_room5_survival_is_terminal_bonus():
+    env = E.Room5SpaceEscape(vision=3.0, max_steps=2, seed=0)
+    env.reset(); env._spawn = lambda: None; env.X = 5.0; env.obstacles = []
+    env.step(1)
+    _, r, done = env.step(1)                                        # reaches S seconds → survive
+    assert done and r >= env.SURVIVE_REWARD - 1e-6 and env.is_success()  # terminal +100
+
+
+def test_room5_shooting_and_cooldown():
     env = E.Room5SpaceEscape(vision=3.0, seed=0)
     env.reset(); env._spawn = lambda: None; env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="debris", hp=1)]
-    _, r, _ = env.step(3)                                           # one shot destroys debris
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="asteroid", hp=1)]
+    _, r, _ = env.step(3)                                           # asteroid dies in ONE shot now
     assert r == env.DESTROY_REWARD and env.shots == env.N_SHOTS - 1 and not env.obstacles
     assert env.cooldown == env.SHOT_COOLDOWN                        # cooldown started
-    # asteroid needs TWO shots, and the second must wait out the cooldown
-    env.reset(); env._spawn = lambda: None; env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="asteroid", hp=2)]
-    _, r1, _ = env.step(3)                                          # 1st shot: damage only
-    assert r1 == 0.0 and env.obstacles[0]["hp"] == 1 and env.shots == env.N_SHOTS - 1
+    # cannot fire again until the cooldown elapses
+    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="debris", hp=1)]
     _, r_cd, _ = env.step(3)                                        # on cooldown → no-op
-    assert r_cd == 0.0 and env.obstacles[0]["hp"] == 1 and env.shots == env.N_SHOTS - 1
+    assert r_cd == 0.0 and env.obstacles and env.obstacles[0]["hp"] == 1
     for _ in range(env.SHOT_COOLDOWN - 1):                          # wait out the rest of it
         env.step(1)
     env.obstacles[0]["x"] = env.X; env.obstacles[0]["y"] = env.AGENT_Y + 2.0
-    _, r2, _ = env.step(3)                                          # 2nd shot: destroy
+    _, r2, _ = env.step(3)                                          # cooldown elapsed → destroy
     assert r2 == env.DESTROY_REWARD and not env.obstacles
 
 

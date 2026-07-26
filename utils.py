@@ -338,9 +338,9 @@ def render_legend(theme, meta):
                       ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
             chips += [(T.get("debris", "🛰️"), "debris · −25, fast, drifts, 1 shot"),
-                      (T.get("asteroid", "☄️"), "asteroid · −15, 2 shots"),
+                      (T.get("asteroid", "☄️"), "asteroid · −15, 1 shot"),
                       (T.get("laser", "🔴"), "shot · destroy = +30 (4 total · 5-step cooldown)"),
-                      ("👁️", "look-ahead sensor")]
+                      ("👁️", "look-ahead sensor (vertical)")]
     elif meta.get("kind") == "sokoban":                     # box-pushing room
         chips += [
             (T["box"], "box · push onto a plate"),
@@ -473,7 +473,7 @@ def render_track_svg(meta, theme, agent=None, trail=None, scale=44, pad=14, fill
 
 def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
                      trail=None, scale=44, pad=14, fill=False, shots=None,
-                     fired=False, cooldown=0, collisions=None):
+                     fired=False, cooldown=0, collisions=None, health=None):
     T = THEMES[theme]
     span = 10.0
     W = int(span * scale + 2 * pad)
@@ -531,6 +531,8 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
                      f"fill='{T['accent']}' text-anchor='start'>👁️ sees {vision:g} m up</text>")
         for ob in (obstacles or []):
             ox, oy = ob[0], ob[1]
+            if oy < 0.0:                                        # never draw below the floor
+                continue
             otype = ob[2] if len(ob) > 2 else "debris"
             emo = T.get("asteroid", "☄️") if otype == "asteroid" else T.get("debris", "🛰️")
             fs = 26 if otype == "debris" else 22
@@ -555,6 +557,14 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
             col = "#f87171" if collisions else "#86efac"
             p.append(f"<text x='{pad+6}' y='{pad+40}' font-size='15' fill='{col}' "
                      f"text-anchor='start' font-weight='700'>hits: {int(collisions)}</text>")
+        if health is not None:                                 # blue health points (top-right)
+            hmax = int(meta.get("health_max", 3))
+            for i in range(hmax):
+                cx = pad + span * scale - 14 - i * 20
+                extra = ("fill='#38bdf8' style='filter:drop-shadow(0 0 4px #38bdf8)'"
+                         if i < int(health) else "fill='none' opacity='0.45'")
+                p.append(f"<circle cx='{cx:.0f}' cy='{pad+12}' r='7' "
+                         f"stroke='#38bdf8' stroke-width='2' {extra}/>")
 
     if trail:
         pts = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in trail)

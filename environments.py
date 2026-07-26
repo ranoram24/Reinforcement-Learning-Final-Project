@@ -1046,17 +1046,22 @@ class Room4Garage:
 # --------------------------------------------------------------------------- #
 class Room5SpaceEscape:
     """Star-Wars gauntlet.  A ship that moves only on X must survive S seconds
-    against a DYNAMIC stream of falling obstacles (up to MAX_OBSTACLES at once,
-    each a random position + type).  It carries N_SHOTS laser shots; a shot
-    damages the nearest obstacle aligned with its column (± SHOT_DX leniency),
-    and destroying one pays +DESTROY_REWARD.  Partial observation: beyond its
-    own (position, velocity) the ship senses obstacles only up to `vision`
-    metres ahead, centre-to-centre — a deliberate POMDP solved with tabular
-    Q-Learning over a discretised look-ahead sensor.
+    against a DYNAMIC stream of falling obstacles — each wave spawns UP TO
+    SPAWN_MAX obstacles at once (random position + type; no on-screen cap).  It
+    carries N_SHOTS laser shots; a shot damages the nearest obstacle aligned
+    with its column (± SHOT_DX leniency), and destroying one pays +DESTROY_REWARD.
+    Partial observation: beyond its own (position, velocity) the ship senses
+    obstacles only up to `vision` metres ahead, centre-to-centre — a deliberate
+    POMDP solved with tabular Q-Learning over a discretised look-ahead sensor.
+
+    The ship has HEALTH hit-points; each collision costs one.  Running out of
+    health ENDS the episode as a TERMINAL failure (DEATH_REWARD = −100).
+    Surviving the full S seconds ENDS it as a TERMINAL success
+    (SURVIVE_REWARD = +100).
 
     Obstacles (all width 0.5):
       • spaceship debris — fall speed 6, drifts sideways as it falls, 1 shot, −25 on hit
-      • asteroid         — fall speed 3, falls straight,               2 shots, −15 on hit
+      • asteroid         — fall speed 3, falls straight,               1 shot, −15 on hit
     Each shot has a SHOT_COOLDOWN-step cooldown; destroying an obstacle pays +DESTROY_REWARD.
     """
 
@@ -1065,7 +1070,8 @@ class Room5SpaceEscape:
     ALGO = "Tabular Q-Learning over a partial-observation sensor"
     DT = 0.02
     AGENT_Y = 1.5
-    MAX_OBSTACLES = 5
+    SPAWN_MAX = 4            # up to this many obstacles spawn per wave (no on-screen cap)
+    HEALTH = 3              # hit-points; hitting 0 = failure (episode still finishes)
     N_SHOTS = 4
     SHOT_COOLDOWN = 5         # steps the agent must wait between shots
     DEBRIS_MOVE_PROB = 0.30  # per-step chance a debris also drifts left/right (diagonal fall)
@@ -1075,9 +1081,11 @@ class Room5SpaceEscape:
     COLLIDE_DX = 0.5           # |Δx| for an obstacle to hit the ship
     SHOT_DX = 0.5             # |Δx| leniency for a laser to connect
     DESTROY_REWARD = 30.0
+    DEATH_REWARD = -100.0    # terminal: health hits 0
+    SURVIVE_REWARD = 100.0   # terminal: survived the full S seconds
     TYPES = {                 # length, fall speed, hit-points (shots to kill), collision reward
         "debris":   dict(length=0.5, speed=6.0, hp=1, collide=-25.0),
-        "asteroid": dict(length=0.5, speed=3.0, hp=2, collide=-15.0),
+        "asteroid": dict(length=0.5, speed=3.0, hp=1, collide=-15.0),
     }
 
     def __init__(self, vision=3.0, spawn_every=15, v_max=3.0,
@@ -1099,6 +1107,7 @@ class Room5SpaceEscape:
         self.Vx = 0.0
         self.obstacles = []                   # dicts: x, y(centre), type, hp
         self.shots = self.N_SHOTS
+        self.health = self.HEALTH             # hit-points; 0 = failure
         self.cooldown = 0                     # steps until the laser can fire again
         self._fired = False                  # did a shot fire THIS step? (for the viz)
         self.t = 0
@@ -1113,11 +1122,11 @@ class Room5SpaceEscape:
         return self.reset()
 
     def _spawn(self):
-        if len(self.obstacles) >= self.MAX_OBSTACLES:
-            return
-        kind = "debris" if self.rng.random() < self.debris_prob else "asteroid"
-        self.obstacles.append(dict(x=float(self.rng.uniform(0.5, 9.5)), y=10.0,
-                                   type=kind, hp=self.TYPES[kind]["hp"]))
+        """A wave: spawn 1..SPAWN_MAX obstacles at once (random x + type)."""
+        for _ in range(int(self.rng.integers(1, self.SPAWN_MAX + 1))):
+            kind = "debris" if self.rng.random() < self.debris_prob else "asteroid"
+            self.obstacles.append(dict(x=float(self.rng.uniform(0.5, 9.5)), y=10.0,
+                                       type=kind, hp=self.TYPES[kind]["hp"]))
 
     # ---- shooting -------------------------------------------------------- #
     def _shoot(self):
@@ -1202,35 +1211,37 @@ class Room5SpaceEscape:
                     and (o["y"] - half) <= self.AGENT_Y <= (o["y"] + half)):
                 reward += self.TYPES[o["type"]]["collide"]
                 self.collisions += 1          # obstacle consumed on impact
-            elif o["y"] > -1.0:
+                self.health = max(0, self.health - 1)
+            elif o["y"] > 0.0:                # keep only obstacles still on the board
                 survivors.append(o)
         self.obstacles = survivors
-
-        if self.t % self.spawn_every == 0:    # dynamic spawn (up to MAX at once)
-            self._spawn()
         self.t += 1
+
+        if self.health <= 0:                  # out of health → TERMINAL failure (−100)
+            return self._obs(), reward + self.DEATH_REWARD, True
         if not self._fired:                   # tick the shot cooldown down
             self.cooldown = max(0, self.cooldown - 1)
-
-        if self.t >= self.max_steps:
+        if self.t >= self.max_steps:          # survived the full S seconds → TERMINAL success (+100)
             self._survived = True
-            return self._obs(), reward, True
+            return self._obs(), reward + self.SURVIVE_REWARD, True
+        if self.t % self.spawn_every == 0:    # dynamic spawn (up to SPAWN_MAX at once)
+            self._spawn()
         return self._obs(), reward, False
 
     def is_success(self):
-        # "escaped" = survived the full S seconds WITHOUT a single collision
-        return self._survived and self.collisions == 0
+        # "escaped" = survived the full S seconds with health left (took < HEALTH hits)
+        return self._survived and self.health > 0
 
     def render_frame(self):
         return {"agent": (self.X, self.AGENT_Y), "shots": self.shots,
-                "fired": self._fired, "cooldown": self.cooldown,
+                "fired": self._fired, "cooldown": self.cooldown, "health": self.health,
                 "collisions": self.collisions, "destroyed": self.destroyed,
                 "obstacles": [(o["x"], o["y"], o["type"], o["hp"]) for o in self.obstacles]}
 
     def render_meta(self):
         return dict(kind="space", bounds=(0.0, 10.0, 0.0, 10.0),
                     agent_y=self.AGENT_Y, obs_width=self.OBS_WIDTH,
-                    vision=self.vision, n_shots=self.N_SHOTS)
+                    vision=self.vision, n_shots=self.N_SHOTS, health_max=self.HEALTH)
 
 
 # --------------------------------------------------------------------------- #

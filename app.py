@@ -60,8 +60,8 @@ ROOMS = {
     "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
                   movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
                   plot="Hezki flies an escape pod through a debris field — 🛰️ debris (fast, drifting) "
-                       "and ☄️ asteroids rain down (random spot & type, up to 5 at once). He dodges on "
-                       "the X axis and has 4 laser shots (+30 a kill), but only senses X metres ahead."),
+                       "and ☄️ asteroids rain down in waves (up to 8 at once, random spot & type). He "
+                       "dodges on the X axis and has 4 laser shots (+30 a kill), but only senses X m up."),
 }
 ORDER = ["room1", "room2", "room3", "room4", "room5"]
 
@@ -199,13 +199,13 @@ def sidebar():
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
                                            0.0, 0.05, 0.0004, 0.0001, format="%.4f", key="ed4")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 20000, 2500, 100, key="ep4")
-        with st.sidebar.expander("Function-approximation & physics"):
-            p["optimistic_init"] = st.slider("optimistic init Q₀", 0.0, 500.0, 60.0, 10.0, key="oi4")
-            p["n_tilings"] = st.slider("tilings", 4, 16, 8, 1, key="nt4")
-            p["n_bins"] = st.slider("bins / dim", 4, 12, 10, 1, key="nb4")
-            p["max_steps"] = st.number_input("max steps / episode", 0, 5000, 2500, 50, key="ms4")
-            p["shaping"] = st.checkbox("reward shaping (follow-the-road potential)", True, key="sh4")
-            p["shaping_coef"] = st.slider("shaping coefficient", 0.0, 40.0, 30.0, 0.5, key="sc4")
+        st.sidebar.markdown("**Function-approximation & physics**")
+        p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 500.0, 60.0, 10.0, key="oi4")
+        p["n_tilings"] = st.sidebar.slider("tilings", 4, 16, 8, 1, key="nt4")
+        p["n_bins"] = st.sidebar.slider("bins / dim", 4, 12, 10, 1, key="nb4")
+        p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 5000, 2500, 50, key="ms4")
+        p["shaping"] = st.sidebar.checkbox("reward shaping (follow-the-road potential)", True, key="sh4")
+        p["shaping_coef"] = st.sidebar.slider("shaping coefficient", 0.0, 40.0, 30.0, 0.5, key="sc4")
         p["epsilon_min"] = 0.0
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
         st.sidebar.caption("🏁 Time-trial: velocity actions Vx,Vy∈{−1,0,1}, dt=0.02 s. Drives the white "
@@ -222,14 +222,14 @@ def sidebar():
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key="em5")
         p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 5000, 100, key="ep5")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
-        with st.sidebar.expander("Physics"):
-            p["v_max"] = st.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm5")
-            p["max_steps"] = st.number_input("survive steps (S = steps × 0.02 s)",
-                                             0, 3000, 500, 50, key="ms5")
-        st.sidebar.caption("🚀 Survive S seconds dodging fast, drifting debris 🛰️ (−25) & asteroids "
-                           "☄️ (−15); 4 laser shots (5-step cooldown) destroy a column-aligned "
-                           "obstacle in view (+30 each; asteroids need 2). Senses obstacles only "
-                           "X m ahead; hugging a wall costs −5/step. 'Escaped' = a run with 0 hits.")
+        st.sidebar.markdown("**Physics**")
+        p["v_max"] = st.sidebar.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm5")
+        p["max_steps"] = st.sidebar.number_input("survive steps (S = steps × 0.02 s)",
+                                                 0, 3000, 500, 50, key="ms5")
+        st.sidebar.caption("🚀 Survive S seconds (+100) dodging waves (up to 4) of fast, drifting "
+                           "debris 🛰️ (−25) & asteroids ☄️ (−15); 💙 3 health — 0 health ends the run "
+                           "(−100). 4 laser shots (5-step cooldown) destroy an in-view obstacle (+30). "
+                           "Sees only X m up; hugging a wall costs −5/step.")
 
     if st.sidebar.button("🎲 Randomize hyperparameters", use_container_width=True):
         st.session_state["_randhp"] = key
@@ -316,7 +316,7 @@ def train(key, p):
 # --------------------------------------------------------------------------- #
 def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
                trail=None, fill=False, mask=0, chaser=None, boxes=None, door_open=False,
-               shots=None, fired=False, cooldown=0, collisions=None):
+               shots=None, fired=False, cooldown=0, collisions=None, health=None):
     theme = U.ROOM_THEME[key]
     if meta.get("kind") == "sokoban":
         return U.render_sokoban_html(meta, theme, agent=agent, boxes=boxes,
@@ -328,7 +328,7 @@ def board_html(key, meta, agent=None, policy=None, obstacles=None, vision=None,
                                   fill=fill, mask=mask, chaser=chaser)
     return U.render_space_svg(meta, theme, agent=agent, obstacles=obstacles,
                               vision=vision, trail=trail, fill=fill, shots=shots,
-                              fired=fired, cooldown=cooldown, collisions=collisions)
+                              fired=fired, cooldown=cooldown, collisions=collisions, health=health)
 
 
 def legend_html(key, meta):
@@ -379,7 +379,8 @@ def render_frames(key, entry, roll, cap=320):
                        vision=vision, mask=f.get("mask", 0), chaser=f.get("chaser"),
                        boxes=f.get("boxes"), door_open=f.get("door_open", False),
                        shots=f.get("shots"), fired=f.get("fired", False),
-                       cooldown=f.get("cooldown", 0), collisions=f.get("collisions"))
+                       cooldown=f.get("cooldown", 0), collisions=f.get("collisions"),
+                       health=f.get("health"))
             for f in frames]
 
 
@@ -479,9 +480,9 @@ def tab_charts(key, entry):
         n, total = len(succ), int(sum(succ))
         if n:
             m1, m2, m3 = st.columns(3)
-            m1.metric("🏆 Clean escapes (0 hits)", f"{total:,}")
-            m2.metric("❌ Episodes with a hit", f"{n - total:,}")
-            m3.metric("🎯 Clean-escape rate", f"{100 * total / n:.1f}%")
+            m1.metric("🏆 Episodes escaped (health left)", f"{total:,}")
+            m2.metric("❌ Episodes failed (0 health)", f"{n - total:,}")
+            m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
         st.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
 
 
@@ -757,6 +758,7 @@ def tab_policy_test(key, entry, run_now):
             frames=render_frames(key, entry, roll), reward=roll["reward"],
             steps=roll["steps"], collisions=env.collisions, destroyed=env.destroyed,
             shots_used=env.N_SHOTS - env.shots, survived=bool(env._survived),
+            health=env.health, health_max=env.HEALTH, escaped=bool(env.is_success()),
             cfg=dict(spawn_every=env.spawn_every, seconds=round(env.max_steps * env.DT, 1),
                      speed_mult=env.speed_mult, debris_prob=env.debris_prob))
 
@@ -770,12 +772,13 @@ def tab_policy_test(key, entry, run_now):
     st.caption(f"spawn every **{cfg['spawn_every']}** steps · fall-speed **×{cfg['speed_mult']}** · "
                f"mix **{int(cfg['debris_prob']*100)}% debris / {int((1-cfg['debris_prob'])*100)}% "
                f"asteroid** — a fresh environment the policy never trained on.")
+    hmax = res.get("health_max", 3)
+    hp = res.get("health", max(0, hmax - res["collisions"]))
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("🎯 Reward", f"{res['reward']:.0f}")
-    m2.metric("💥 Collisions", res["collisions"])
+    m2.metric("💙 Health", f"{hp}/{hmax}   ({res['collisions']} hits)")
     m3.metric("🔴 Destroyed", f"{res['destroyed']}  ({res['shots_used']}/4 shots)")
-    m4.metric("Outcome", "clean ✅" if (res["survived"] and res["collisions"] == 0)
-              else ("survived" if res["survived"] else "ended early"))
+    m4.metric("Outcome", "escaped ✅" if res.get("escaped") else "failed ❌")
     st.caption("Replay of this one generated room:")
     embed(U.render_player(res["frames"], delay_ms=70, caption=None), height=SPACE_H + 70)
 
