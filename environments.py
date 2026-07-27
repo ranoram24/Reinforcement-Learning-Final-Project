@@ -1046,8 +1046,9 @@ class Room4Garage:
 # --------------------------------------------------------------------------- #
 class Room5AsteroidField:
     """Star-Wars asteroid field.  Hezki's escape pod must cross the 10×10 m
-    arena from the middle-left start to a middle-right goal region — Frogger-
-    style — dodging a bank of vertical traffic lanes on foot.  There is no
+    arena from the middle-left start to the goal region — the whole right-edge
+    lane (X >= GOAL_X, any Y) — Frogger-style, dodging a bank of vertical
+    traffic lanes on foot.  There is no
     shooting; the only actions are the four cardinal moves.
 
     The field between the start column (X<1) and the goal column (X≥9) is
@@ -1094,7 +1095,7 @@ class Room5AsteroidField:
     ALGO = "Deep Q-Network (DQN)"
     START = (1.0, 5.0)
     GOAL_X = 9.0
-    GOAL_Y_LO, GOAL_Y_HI = 4.0, 6.0
+    GOAL_Y_LO, GOAL_Y_HI = 0.0, 10.0  # the whole right-edge lane counts as the goal
     STEP_SIZE = 0.2                  # metres moved per action
     OBS_WIDTH = 0.5                  # asteroid width/diameter
     COLLIDE_DIST = 0.5               # centre-to-centre distance that counts as a hit

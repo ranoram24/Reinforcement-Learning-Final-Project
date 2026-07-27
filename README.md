@@ -183,7 +183,8 @@ S # E D . . . . # .
 A **Frogger-style crossing**: Hezki's escape pod must get from the middle-left start to a
 middle-right goal region, dodging two lanes of vertical asteroid traffic. There is no shooting.
 
-* **Arena** continuous `0 ≤ X,Y ≤ 10 m`. Start `(1.0, 5.0)`. Goal region `X ≥ 9.0 ∧ 4.0 ≤ Y ≤ 6.0`.
+* **Arena** continuous `0 ≤ X,Y ≤ 10 m`. Start `(1.0, 5.0)`. Goal region `X ≥ 9.0` — the whole
+  right-edge lane, any `Y`.
 * **Actions** 4 discrete moves — Up / Down / Left / Right — each a fixed `0.2 m` step.
 * **Traffic** the field between the start column (`X<1`) and the goal column (`X≥9`) is tiled by
   **8 fixed, 1 m-wide lanes** that alternate direction — lane `X∈[1,2)` falls (grey, spawns at

@@ -347,8 +347,17 @@ def test_room5_goal_region_is_terminal_success():
     env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
     env.reset()
     env.X, env.Y = 8.8, 5.0
-    _, r, done = env.step(E.RIGHT)                                  # crosses into X>=9, Y in [4,6]
+    _, r, done = env.step(E.RIGHT)                                  # crosses into X>=9
     assert done and env.is_success() and r == env.STEP_REWARD + env.GOAL_REWARD
+
+
+def test_room5_goal_region_spans_the_whole_right_lane():
+    for y in (0.0, 1.0, 9.0, 10.0):                                 # any Y counts, not just Y in [4,6]
+        env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+        env.reset()
+        env.X, env.Y = 8.8, y
+        _, r, done = env.step(E.RIGHT)
+        assert done and env.is_success() and r == env.STEP_REWARD + env.GOAL_REWARD
 
 
 def test_room5_collision_penalises_but_does_not_reset_position():

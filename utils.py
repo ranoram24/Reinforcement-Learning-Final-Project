@@ -542,8 +542,8 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
             p.append(f"<line x1='{px(hx):.1f}' y1='{pad:.1f}' x2='{px(hx):.1f}' "
                      f"y2='{pad+span*scale:.1f}' stroke='{T['accent']}' stroke-width='1.5' "
                      f"stroke-dasharray='4 4' opacity='.5'/>")
-        gx = meta.get("goal_x", 9.0)                            # goal region (pink)
-        gylo, gyhi = meta.get("goal_y", (4.0, 6.0))
+        gx = meta.get("goal_x", 9.0)                            # goal region (pink) — whole lane
+        gylo, gyhi = meta.get("goal_y", (0.0, 10.0))
         goal_c = T.get("goal_c", "#ec4899")
         p.append(f"<rect x='{px(gx):.1f}' y='{py(gyhi):.1f}' width='{(span-gx)*scale:.1f}' "
                  f"height='{(gyhi-gylo)*scale:.1f}' fill='{goal_c}' "
@@ -554,6 +554,14 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
         mx = safe_x / 2.0                                       # safe column, never over a lane
         p.append(f"<circle cx='{px(mx):.1f}' cy='{py(sy):.1f}' r='{0.24*scale:.0f}' fill='none' "
                  f"stroke='{T['accent']}' stroke-width='2' stroke-dasharray='3 3' opacity='.6'/>")
+        if vision and agent is not None:                        # radar detection circle
+            ax, ay = agent
+            p.append(f"<circle cx='{px(ax):.1f}' cy='{py(ay):.1f}' r='{vision*scale:.1f}' "
+                     f"fill='{T['accent']}' fill-opacity='.05' stroke='{T['accent']}' "
+                     f"stroke-width='1.5' stroke-dasharray='5 4' opacity='.55'/>")
+            p.append(f"<text x='{px(ax):.1f}' y='{max(pad+12, py(ay)-vision*scale-6):.1f}' "
+                     f"font-size='11' fill='{T['accent']}' text-anchor='middle' opacity='.85'>"
+                     f"📡 {vision:g} m radar</text>")
         for ob in (obstacles or []):                            # asteroid icon, tinted by direction
             ox, oy = ob[0], ob[1]
             kind = ob[2] if len(ob) > 2 else "down"

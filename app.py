@@ -23,6 +23,19 @@ import utils as U
 st.set_page_config(page_title="Hezki vs. MIB — RL Escape Room",
                    page_icon="🐕", layout="wide")
 
+# Force LTR: on an RTL-locale browser, Streamlit's slider widgets can otherwise
+# inherit right-to-left direction and drag backwards (min on the right).
+st.markdown("""
+<style>
+  html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+    direction: ltr !important;
+  }
+  div[data-baseweb="slider"], div[data-testid="stSlider"] {
+    direction: ltr !important;
+  }
+</style>
+""", unsafe_allow_html=True)
+
 
 def embed(html, height):
     """Render self-contained HTML (scripts included) in an isolated iframe.
@@ -247,7 +260,7 @@ def sidebar():
         st.sidebar.caption("🚀 Cross 8 alternating lanes left→right, Frogger-style — no shooting "
                            "(grey falls, blue rises, ≤2 asteroids/lane, single file; lanes past "
                            "X=5 are 20% faster & denser). 3 lives, a hit costs −50 (stays put, no "
-                           "reset). Goal (X≥9, 4≤Y≤6) pays +1000; 0 lives or a timeout pays "
+                           "reset). Goal (X≥9, the whole lane) pays +1000; 0 lives or a timeout pays "
                            "−300. Step −1; +100 the first time you reach a new lane (once per lane "
                            "per episode); −5/step if blocked by a wall; −20/step camping near X=0.")
 
