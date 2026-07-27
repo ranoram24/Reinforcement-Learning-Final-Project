@@ -7,7 +7,7 @@ movie sets of increasing difficulty, each solved by a different RL algorithm:
     Room 2  Dark Temple      (Indiana Jones)    SARSA
     Room 3  Cloning Lab      (The Matrix)       Q-Learning (Cliff Walking)
     Room 4  Hovercar Garage  (Fast & Furious)   Tile-coding Function Approximation
-    Room 5  Space Escape     (Star Wars)        Q-Learning + partial observability
+    Room 5  Asteroid Field   (Star Wars)        Deep Q-Network (DQN)
 
 Run:  streamlit run app.py
 """
@@ -57,11 +57,13 @@ ROOMS = {
                   plot="Hezki hits the downhill touge. A winding canyon road (drive on the "
                        "white!), a hitbox that can't clip the black walls, and a clock — "
                        "finishing pays +1000/total_time, so a faster drift scores higher."),
-    "room5": dict(label="Space Escape", emoji="🚀", stars=5, kind="space",
-                  movie="Star Wars (1977)", algo="Q-Learning over a partial-observation sensor",
-                  plot="Hezki flies an escape pod through a debris field — 🛰️ debris (fast, drifting) "
-                       "and ☄️ asteroids rain down in waves (up to 8 at once, random spot & type). He "
-                       "dodges on the X axis and has 4 laser shots (+30 a kill), but only senses X m up."),
+    "room5": dict(label="Asteroid Field", emoji="🚀", stars=5, kind="space",
+                  movie="Star Wars", algo="Deep Q-Network (DQN)",
+                  plot="Hezki must cross the asteroid field, Frogger-style — left to right, no "
+                       "shooting. A grey stream falls through the first lane, a blue stream rises "
+                       "through the second (faster past the midline); 3 lives, a hit sends him back "
+                       "to the start. A neural Q-network (PyTorch) learns the crossing from the "
+                       "closest 4 asteroids' relative positions."),
 }
 ORDER = ["room1", "room2", "room3", "room4", "room5"]
 
@@ -126,17 +128,19 @@ def _randomize_hp(key):
         ss["ms4"] = integer(1800, 2600, 50)    # a lap needs ~1300 steps — keep the budget above it
         ss["sh4"] = True                       # shaping on — the room rarely solves without it
         ss["sc4"] = flt(20.0, 40.0, 5.0)
-    else:  # room5
-        ss["v5"] = flt(2.0, 5.0, 0.5)
-        ss["sp5"] = integer(8, 30, 1)
-        ss["a5"] = flt(0.05, 0.40, 0.01)
+    else:  # room5 — DQN
+        ss["a5"] = flt(0.0002, 0.0050, 0.0001)
         ss["g5"] = flt(0.90, 0.999, 0.001)
+        ss["b5"] = _r.choice([32, 64, 128, 256])
         ss["e5"] = flt(0.60, 1.00, 0.01)
-        ss["ed5"] = flt(0.0002, 0.0010, 0.0001)
+        ss["ed5"] = flt(0.0005, 0.0050, 0.0001)
         ss["em5"] = flt(0.00, 0.10, 0.01)
-        ss["ep5"] = integer(2000, 6000, 100)
-        ss["vm5"] = flt(4.0, 6.0, 0.5)
-        ss["ms5"] = integer(400, 800, 1)
+        ss["tu5"] = integer(100, 1500, 50)
+        ss["ep5"] = integer(600, 3000, 50)
+        ss["h5"] = _r.choice([32, 64, 128, 256])
+        ss["sp5"] = flt(0.06, 0.24, 0.01)
+        ss["sd5"] = flt(0.08, 0.28, 0.01)
+        ss["ms5"] = integer(300, 700, 10)
 
 
 # --------------------------------------------------------------------------- #
@@ -211,25 +215,31 @@ def sidebar():
         st.sidebar.caption("🏁 Time-trial: velocity actions Vx,Vy∈{−1,0,1}, dt=0.02 s. Drives the white "
                            "road on a distance-to-finish reward route; wall −10/step; finish "
                            "+1000/total_time. Needs ≥~1,500 max-steps to reach the finish; ~1-2 min.")
-    else:  # room5
-        p["vision"] = st.sidebar.slider("👁️ vision — X metres seen ahead", 0.5, 8.0, 3.0, 0.5, key="v5")
-        p["spawn_every"] = st.sidebar.slider("obstacle spawn every N steps", 5, 60, 15, 1, key="sp5")
-        p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key="a5")
-        p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.95, 0.001, key="g5")
+    else:  # room5 — Deep Q-Network
+        st.sidebar.markdown("**Deep Q-Network**")
+        p["alpha"] = st.sidebar.slider("learning rate (LR)", 0.0001, 0.0100, 0.0010, 0.0001,
+                                       format="%.4f", key="a5")
+        p["gamma"] = st.sidebar.slider("γ  discount", 0.80, 0.999, 0.98, 0.001, key="g5")
+        p["batch"] = st.sidebar.select_slider("batch size", [16, 32, 64, 128, 256], value=64, key="b5")
         p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
-        p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
-                                           0.0, 0.05, 0.0004, 0.0001, format="%.4f", key="ed5")
-        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.01, 0.01, key="em5")
-        p["episodes"] = st.sidebar.number_input("episodes", 200, 30000, 5000, 100, key="ep5")
+        p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (epsilon decay, linear ε=ε₀−K·t)",
+                                           0.0002, 0.0100, 0.0020, 0.0001, format="%.4f", key="ed5")
+        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.05, 0.01, key="em5")
+        p["target_every"] = st.sidebar.slider("target-network update frequency (steps)",
+                                              50, 3000, 500, 50, key="tu5")
+        p["episodes"] = st.sidebar.number_input("episodes", 100, 20000, 1200, 50, key="ep5")
+        p["hidden"] = st.sidebar.select_slider("hidden units / layer", [32, 64, 128, 256],
+                                               value=128, key="h5")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
-        st.sidebar.markdown("**Physics**")
-        p["v_max"] = st.sidebar.slider("max speed (m/s)", 1.0, 6.0, 3.0, 0.5, key="vm5")
-        p["max_steps"] = st.sidebar.number_input("survive steps (S = steps × 0.02 s)",
-                                                 0, 3000, 500, 50, key="ms5")
-        st.sidebar.caption("🚀 Survive S seconds (+100) dodging waves (up to 4) of fast, drifting "
-                           "debris 🛰️ (−25) & asteroids ☄️ (−15); 💙 3 health — 0 health ends the run "
-                           "(−100). 4 laser shots (5-step cooldown) destroy an in-view obstacle (+30). "
-                           "Sees only X m up; hugging a wall costs −5/step.")
+        st.sidebar.markdown("**Asteroid field**")
+        p["spawn_prob"] = st.sidebar.slider("spawn probability / step / lane", 0.02, 0.40, 0.12,
+                                            0.01, key="sp5")
+        p["speed"] = st.sidebar.slider("asteroid speed (m / step)", 0.05, 0.40, 0.15, 0.01, key="sd5")
+        p["max_steps"] = st.sidebar.number_input("max steps / episode", 50, 2000, 500, 10, key="ms5")
+        st.sidebar.caption("🚀 Cross the field left→right, Frogger-style — no shooting. Grey asteroids "
+                           "fall through X∈[2,4], blue ones rise through X∈[6,8] (20% faster & denser "
+                           "past X=5); 3 lives, a hit costs −50 and resets you to the start. Goal "
+                           "(X≥9, 4≤Y≤6) pays +1000; 0 lives or a timeout pays −300. Step −1.")
 
     if st.sidebar.button("🎲 Randomize hyperparameters", use_container_width=True):
         st.session_state["_randhp"] = key
@@ -245,7 +255,7 @@ def sidebar():
         random_clicked = st.sidebar.button("🎲 Generate Random Room & Test Policy",
                                            use_container_width=True, disabled=not trained,
                                            help=None if trained else "Train Room 5 first.")
-        st.sidebar.caption("Spawns ONE random room (random speeds, type-mix & survival time) and "
+        st.sidebar.caption("Spawns ONE random asteroid field (random spawn rate & speed) and "
                            "runs the trained policy through it — see the **🎲 Policy Test** tab.")
     return key, p, train_clicked, random_clicked
 
@@ -263,8 +273,8 @@ def build_env(key, p, seed=None):
     if key == "room4":
         return E.Room4Garage(max_steps=p["max_steps"], shaping=p["shaping"],
                              shaping_coef=p["shaping_coef"])
-    return E.Room5SpaceEscape(vision=p["vision"], spawn_every=p["spawn_every"],
-                              v_max=p["v_max"], max_steps=p["max_steps"], seed=seed)
+    return E.Room5AsteroidField(spawn_prob=p["spawn_prob"], speed=p["speed"],
+                                max_steps=p["max_steps"], seed=seed)
 
 
 def train(key, p):
@@ -299,7 +309,10 @@ def train(key, p):
         elif key == "room2":
             agent = A.Sarsa(env, max_steps=p["max_steps"],
                             optimistic_init=p.get("optimistic_init", 0.0), **common)
-        else:  # room3 & room5 -> Q-Learning
+        elif key == "room5":
+            agent = A.DQNAgent(env, max_steps=p["max_steps"], hidden=p["hidden"],
+                               batch=p["batch"], target_every=p["target_every"], **common)
+        else:  # room3 -> Q-Learning
             agent = A.QLearning(env, max_steps=p["max_steps"],
                                 optimistic_init=p.get("optimistic_init", 0.0), **common)
         res = agent.train(snapshots=6, progress=cb)
@@ -370,17 +383,14 @@ def render_frames(key, entry, roll, cap=320):
     """Render a rollout's frames to themed HTML for the replay player.
     Very long episodes are down-sampled so the animation payload stays light."""
     meta = entry["meta"]
-    vision = entry["params"].get("vision") if key == "room5" else None
     frames = roll["frames"]
     if len(frames) > cap:                                    # keep the last frame
         step = (len(frames) - 1) / (cap - 1)
         frames = [frames[int(round(i * step))] for i in range(cap)]
     return [board_html(key, meta, agent=f["agent"], obstacles=f.get("obstacles"),
-                       vision=vision, mask=f.get("mask", 0), chaser=f.get("chaser"),
+                       mask=f.get("mask", 0), chaser=f.get("chaser"),
                        boxes=f.get("boxes"), door_open=f.get("door_open", False),
-                       shots=f.get("shots"), fired=f.get("fired", False),
-                       cooldown=f.get("cooldown", 0), collisions=f.get("collisions"),
-                       health=f.get("health"))
+                       collisions=f.get("collisions"), health=f.get("health"))
             for f in frames]
 
 
@@ -443,7 +453,6 @@ def tab_simulation(key, entry):
         roll = eval_roll(key, entry, entry["final_policy"], seed=1)
         last = roll["frames"][-1]
         embed(board_html(key, meta, agent=last["agent"], obstacles=last.get("obstacles"),
-                         vision=entry["params"].get("vision") if key == "room5" else None,
                          trail=[f["agent"] for f in roll["frames"]] if key == "room4" else None,
                          fill=True), height=board_h)
         ok = "✅ escaped" if roll["success"] else "❌ did not finish"
@@ -492,15 +501,19 @@ def tab_charts(key, entry):
         c1.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
         c2.plotly_chart(U.length_curve(res["lengths"], window=50,
                         title="Episode duration (moving avg)"), use_container_width=True)
-    else:  # room5
+    else:  # room5 — DQN
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))
         if n:
             m1, m2, m3 = st.columns(3)
-            m1.metric("🏆 Episodes escaped (health left)", f"{total:,}")
-            m2.metric("❌ Episodes failed (0 health)", f"{n - total:,}")
-            m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
-        st.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
+            m1.metric("🏆 Episodes reached the goal", f"{total:,}")
+            m2.metric("❌ Episodes failed", f"{n - total:,}")
+            m3.metric("🎯 Success rate", f"{100 * total / n:.1f}%")
+        c1, c2 = st.columns(2)
+        c1.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
+        c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
+        st.plotly_chart(U.length_curve(res["lengths"], window=50,
+                        title="Episode duration (moving avg)"), use_container_width=True)
 
 
 def discounted_return(step_rewards, gamma):
@@ -724,12 +737,14 @@ def tab_replay(key, entry, random_clicked):
                               caption=f"episode #{ep['episode']}"), height=board_h)
 
 
-PRETTY = {"alpha": "α", "gamma": "γ", "epsilon": "ε₀", "epsilon_k": "ε decrement K",
+PRETTY = {"alpha": "α / LR", "gamma": "γ", "epsilon": "ε₀", "epsilon_k": "ε decrement K",
           "epsilon_min": "ε min", "optimistic_init": "Q₀ optimistic init",
           "theta": "θ", "episodes": "episodes", "max_steps": "max steps/episode",
           "n_tilings": "tilings", "n_bins": "bins/dim", "v_max": "v_max",
           "shaping": "reward shaping", "shaping_coef": "shaping coef",
-          "hard_walls": "hard walls", "vision": "vision range", "spawn_every": "spawn every"}
+          "hard_walls": "hard walls", "batch": "batch size", "hidden": "hidden units",
+          "target_every": "target-update freq", "spawn_prob": "spawn probability",
+          "speed": "asteroid speed"}
 
 
 def params_panel(key, entry):
@@ -748,12 +763,12 @@ def params_panel(key, entry):
 def default_params(key):
     """Minimal params so an untrained room can still render its static layout."""
     return dict(v_max=3.0, max_steps=800, shaping=True, shaping_coef=5.0,
-                hard_walls=False, vision=3.0, spawn_every=15)
+                hard_walls=False, spawn_prob=0.12, speed=0.15)
 
 
 def tab_policy_test(key, entry, run_now):
     """Room 5 only — run the trained policy through ONE freshly generated random
-    room (random fall-speeds, type-mix and survival time) and show the result."""
+    asteroid field (random spawn rate & speed) and show the result."""
     if not entry:
         st.info("Train Room 5 first, then generate a random room to test the policy here.")
         return
@@ -762,39 +777,32 @@ def tab_policy_test(key, entry, run_now):
         seed = int(st.session_state.get("r5_seed", 0)) + 1
         st.session_state["r5_seed"] = seed
         rng = np.random.default_rng(1234 + seed)
-        tp = entry["params"]
-        env = E.Room5SpaceEscape(
-            vision=tp.get("vision", 3.0), v_max=tp.get("v_max", 3.0),   # agent kept as trained
-            spawn_every=int(rng.integers(8, 26)),                       # random density
-            max_steps=int(rng.integers(300, 701)),                      # random survival time S
-            speed_mult=float(round(rng.uniform(0.8, 1.4), 2)),          # random fall speed
-            debris_prob=float(round(rng.uniform(0.3, 0.7), 2)),         # random type mix
+        env = E.Room5AsteroidField(
+            spawn_prob=float(round(rng.uniform(0.06, 0.28), 3)),   # random traffic density
+            speed=float(round(rng.uniform(0.08, 0.30), 3)),        # random asteroid speed
+            max_steps=int(rng.integers(300, 701)),                 # random step budget
             seed=1234 + seed)
         roll = A.rollout(env, entry["final_policy"], max_steps=env.max_steps)
         st.session_state[STORE] = dict(
             frames=render_frames(key, entry, roll), reward=roll["reward"],
-            steps=roll["steps"], collisions=env.collisions, destroyed=env.destroyed,
-            shots_used=env.N_SHOTS - env.shots, survived=bool(env._survived),
-            health=env.health, health_max=env.HEALTH, escaped=bool(env.is_success()),
-            cfg=dict(spawn_every=env.spawn_every, seconds=round(env.max_steps * env.DT, 1),
-                     speed_mult=env.speed_mult, debris_prob=env.debris_prob))
+            steps=roll["steps"], hits=env.hits, lives=env.lives, lives_max=env.LIVES,
+            escaped=bool(env.is_success()),
+            cfg=dict(spawn_prob=env.spawn_prob, speed=env.speed, max_steps=env.max_steps))
 
     res = st.session_state.get(STORE)
     if not res:
         st.info("Click **🎲 Generate Random Room & Test Policy** in the sidebar to spawn one "
-                "random room and run the trained policy through it.")
+                "random asteroid field and run the trained policy through it.")
         return
     cfg = res["cfg"]
-    st.markdown(f"### 🎲 One random room  ·  survive **{cfg['seconds']} s**")
-    st.caption(f"spawn every **{cfg['spawn_every']}** steps · fall-speed **×{cfg['speed_mult']}** · "
-               f"mix **{int(cfg['debris_prob']*100)}% debris / {int((1-cfg['debris_prob'])*100)}% "
-               f"asteroid** — a fresh environment the policy never trained on.")
-    hmax = res.get("health_max", 3)
-    hp = res.get("health", max(0, hmax - res["collisions"]))
+    st.markdown("### 🎲 One random asteroid field")
+    st.caption(f"spawn probability **{cfg['spawn_prob']:.2f}**/step/lane · asteroid speed "
+               f"**{cfg['speed']:.2f}** m/step · max **{cfg['max_steps']}** steps — a fresh "
+               f"environment the policy never trained on.")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("🎯 Reward", f"{res['reward']:.0f}")
-    m2.metric("💙 Health", f"{hp}/{hmax}   ({res['collisions']} hits)")
-    m3.metric("🔴 Destroyed", f"{res['destroyed']}  ({res['shots_used']}/4 shots)")
+    m2.metric("💙 Lives", f"{res['lives']}/{res['lives_max']}   ({res['hits']} hits)")
+    m3.metric("Steps", f"{res['steps']}")
     m4.metric("Outcome", "escaped ✅" if res.get("escaped") else "failed ❌")
     st.caption("Replay of this one generated room:")
     embed(U.render_player(res["frames"], delay_ms=70, caption=None), height=SPACE_H + 70)

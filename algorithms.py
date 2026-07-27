@@ -461,7 +461,7 @@ class DQNAgent:
 
     def train(self, snapshots=6, progress=None, record=25):
         import torch
-        rewards, lengths, snaps, tapes, eps_hist = [], [], [], [], []
+        rewards, lengths, snaps, tapes, eps_hist, succ = [], [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         huber = torch.nn.SmoothL1Loss()
@@ -490,6 +490,7 @@ class DQNAgent:
                     self.tgt.load_state_dict(self.q.state_dict())
             eps = max(self.eps_min, eps - self.eps_k)
             rewards.append(total); lengths.append(steps); eps_hist.append(eps)
+            succ.append(bool(self.env.is_success()))
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -501,7 +502,7 @@ class DQNAgent:
         final = self._policy()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, lengths=lengths, epsilons=eps_hist,
-                    snapshots=snaps, final_policy=final, tapes=tapes)
+                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
 
 
 # --------------------------------------------------------------------------- #

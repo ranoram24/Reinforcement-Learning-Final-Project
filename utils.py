@@ -65,10 +65,11 @@ THEMES = {
         accent="#ec4899", neon2="#22d3ee",
         road="#eef2f7", road_edge="#ec4899", centerline="#fbbf24",
         car="🏎️", agent="🏎️", exit="🏁", start="🟣", finish="🏁"),
-    "space": dict(  # Star Wars
+    "space": dict(  # Star Wars — Asteroid Field Crossing
         movie="Star Wars", board="#02030a", grid="#0b1030",
-        accent="#eab308", drone="🛸", agent="🚀",
-        debris="🛰️", asteroid="☄️", laser="🔴"),
+        accent="#eab308", agent="🚀", goal="🏁", asteroid="☄️",
+        down_c="#9ca3af", up_c="#3b82f6",               # direction glow: grey (falling) / blue (rising)
+        zone_down_c="#334155", zone_up_c="#1e3a8a", goal_c="#ec4899"),
 }
 
 ROOM_THEME = {"room1": "ice", "room2": "matrix", "room3": "temple",
@@ -337,10 +338,14 @@ def render_legend(theme, meta):
                       (T["exit"], "finish · +1000 / total time"),
                       ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
-            chips += [(T.get("debris", "🛰️"), "debris · −25, fast, drifts, 1 shot"),
-                      (T.get("asteroid", "☄️"), "asteroid · −15, 1 shot"),
-                      (T.get("laser", "🔴"), "shot · destroy = +30 (4 total · 5-step cooldown)"),
-                      ("👁️", "look-ahead sensor (vertical)")]
+            chips += [(T.get("goal", "🏁"), f"goal region · +{meta.get('goal_reward', 1000):g} (terminal)"),
+                      (T.get("asteroid", "☄️"), "asteroid · grey glow = falling, blue glow = rising "
+                                               "· width 0.5 m · up to 4 per lane, single file"),
+                      ("d/u · D/U", "lane letters: lower = normal lane, UPPER = hard lane (faster & denser)"),
+                      ("💙", f"{meta.get('health_max', 3)} lives · hit (< 0.5 m) = "
+                             f"{meta.get('collision_reward', -50):g} + back to start"),
+                      ("⏱️", f"0 lives / out of time · {meta.get('fail_reward', -300):g} (terminal)"),
+                      ("👣", "each step · −1")]
     elif meta.get("kind") == "sokoban":                     # box-pushing room
         chips += [
             (T["box"], "box · push onto a plate"),
@@ -511,53 +516,53 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
                  f"height='{(span-ey)*scale}' fill='#22c55e' opacity='.22'/>")
         p.append(f"<text x='{px((ex+span)/2)}' y='{py((ey+span)/2)+8}' font-size='26' "
                  f"text-anchor='middle'>{T['exit']}</text>")
-    else:  # space
-        ay = meta.get("agent_y", 1.5)
-        ax = agent[0] if agent else 5.0
-        if vision:                                             # look-ahead sensor
-            x0 = max(0.0, ax - 1.5)
-            x1 = min(span, ax + 1.5)
-            yt, yb = py(ay + vision), py(ay)
-            # faint 3-lane band (fixed width) capped at the VERTICAL vision depth
-            p.append(f"<rect x='{px(x0)}' y='{yt:.1f}' width='{(x1-x0)*scale}' "
-                     f"height='{yb-yt:.1f}' fill='{T['accent']}' opacity='.10'/>")
-            # vertical measure at the ship's column: this is what `vision` controls
-            p.append(f"<line x1='{px(ax):.1f}' y1='{yb:.1f}' x2='{px(ax):.1f}' y2='{yt:.1f}' "
-                     f"stroke='{T['accent']}' stroke-width='2' stroke-dasharray='5 4' opacity='.85'/>")
-            for yy in (yt, yb):                                # end ticks
-                p.append(f"<line x1='{px(ax)-6:.1f}' y1='{yy:.1f}' x2='{px(ax)+6:.1f}' y2='{yy:.1f}' "
-                         f"stroke='{T['accent']}' stroke-width='2' opacity='.85'/>")
-            p.append(f"<text x='{px(ax)+9:.1f}' y='{yt+14:.1f}' font-size='12' "
-                     f"fill='{T['accent']}' text-anchor='start'>👁️ sees {vision:g} m up</text>")
-        for ob in (obstacles or []):
+    else:  # space — Room 5: Asteroid Field Crossing (Frogger-style, no shooting)
+        lanes = meta.get("lanes", [])
+        safe_x = lanes[0]["x_lo"] if lanes else 1.0             # left safe column: X < safe_x
+        p.append(f"<rect x='{px(0.0):.1f}' y='{pad:.1f}' width='{safe_x*scale:.1f}' "
+                 f"height='{span*scale:.1f}' fill='#3b2f6b' opacity='.30'/>")
+        for lane in lanes:                                      # 8 fixed alternating lanes
+            lo, hi = lane["x_lo"], lane["x_hi"]
+            down = lane["dir"] == "down"
+            base_c = T.get("zone_down_c", "#334155") if down else T.get("zone_up_c", "#1e3a8a")
+            opacity = ".40" if lane["hard"] else ".22"          # hard lanes read visibly denser
+            p.append(f"<rect x='{px(lo):.1f}' y='{pad:.1f}' width='{(hi-lo)*scale:.1f}' "
+                     f"height='{span*scale:.1f}' fill='{base_c}' opacity='{opacity}'/>")
+            letter = ("D" if down else "U") if lane["hard"] else ("d" if down else "u")
+            txt_c = "#cbd5e1" if down else "#bfdbfe"
+            p.append(f"<text x='{px((lo+hi)/2):.1f}' y='{pad+16:.1f}' font-size='13' "
+                     f"font-weight='700' fill='{txt_c}' text-anchor='middle'>{letter}</text>")
+        hx = meta.get("halfway_x")
+        if hx is not None:                                     # dashed line: hard lanes start here
+            p.append(f"<line x1='{px(hx):.1f}' y1='{pad:.1f}' x2='{px(hx):.1f}' "
+                     f"y2='{pad+span*scale:.1f}' stroke='{T['accent']}' stroke-width='1.5' "
+                     f"stroke-dasharray='4 4' opacity='.5'/>")
+        gx = meta.get("goal_x", 9.0)                            # goal region (pink)
+        gylo, gyhi = meta.get("goal_y", (4.0, 6.0))
+        goal_c = T.get("goal_c", "#ec4899")
+        p.append(f"<rect x='{px(gx):.1f}' y='{py(gyhi):.1f}' width='{(span-gx)*scale:.1f}' "
+                 f"height='{(gyhi-gylo)*scale:.1f}' fill='{goal_c}' "
+                 f"opacity='.30' stroke='{goal_c}' stroke-width='2'/>")
+        p.append(f"<text x='{px((gx+span)/2):.1f}' y='{py((gylo+gyhi)/2)+8:.1f}' font-size='22' "
+                 f"text-anchor='middle'>{T.get('goal','🏁')}</text>")
+        _, sy = meta.get("start", (1.0, 5.0))                   # start marker — centred in the
+        mx = safe_x / 2.0                                       # safe column, never over a lane
+        p.append(f"<circle cx='{px(mx):.1f}' cy='{py(sy):.1f}' r='{0.24*scale:.0f}' fill='none' "
+                 f"stroke='{T['accent']}' stroke-width='2' stroke-dasharray='3 3' opacity='.6'/>")
+        for ob in (obstacles or []):                            # asteroid icon, tinted by direction
             ox, oy = ob[0], ob[1]
-            if oy < 0.0:                                        # never draw below the floor
-                continue
-            otype = ob[2] if len(ob) > 2 else "debris"
-            emo = T.get("asteroid", "☄️") if otype == "asteroid" else T.get("debris", "🛰️")
-            fs = 26 if otype == "debris" else 22
-            p.append(f"<text x='{px(ox)}' y='{py(oy)+8}' font-size='{fs}' "
-                     f"text-anchor='middle'>{emo}</text>")
-            if otype == "asteroid" and len(ob) > 3 and ob[3] >= 2:   # 2-hp asteroid marker
-                p.append(f"<circle cx='{px(ox)}' cy='{py(oy)}' r='{0.34*scale:.0f}' "
-                         f"fill='none' stroke='#f87171' stroke-width='2' opacity='.7'/>")
-        if fired and agent is not None:                        # laser shot visualization
-            p.append(f"<rect x='{px(ax-0.08):.1f}' y='{pad:.1f}' width='{0.16*scale:.1f}' "
-                     f"height='{py(ay)-pad:.1f}' rx='3' fill='#38bdf8' opacity='.85' "
-                     f"style='filter:drop-shadow(0 0 7px #7dd3fc)'/>")
-            p.append(f"<circle cx='{px(ax):.1f}' cy='{py(ay):.1f}' r='{0.55*scale:.0f}' "
-                     f"fill='none' stroke='#38bdf8' stroke-width='3' opacity='.9' "
-                     f"style='filter:drop-shadow(0 0 9px #38bdf8)'/>")
-        if shots is not None:                                  # ammo + cooldown readout
-            bolts = "".join(T.get("laser", "🔴") for _ in range(int(shots)))
-            cd = f"   · cooling {int(cooldown)}" if cooldown else ""
-            p.append(f"<text x='{pad+6}' y='{pad+20}' font-size='15' fill='#e5e7eb' "
-                     f"text-anchor='start'>shots: {bolts or '—'}{cd}</text>")
-        if collisions is not None:                             # running hit counter
+            kind = ob[2] if len(ob) > 2 else "down"
+            hard = bool(ob[3]) if len(ob) > 3 else False
+            glow = T.get("up_c", "#3b82f6") if kind == "up" else T.get("down_c", "#9ca3af")
+            fs = 24 if hard else 21                             # hard-lane asteroids a touch bigger
+            p.append(f"<text x='{px(ox):.1f}' y='{py(oy)+7:.1f}' font-size='{fs}' "
+                     f"text-anchor='middle' style='filter:drop-shadow(0 0 4px {glow})'>"
+                     f"{T.get('asteroid','☄️')}</text>")
+        if collisions is not None:                              # running hit counter
             col = "#f87171" if collisions else "#86efac"
-            p.append(f"<text x='{pad+6}' y='{pad+40}' font-size='15' fill='{col}' "
+            p.append(f"<text x='{pad+6}' y='{pad+20}' font-size='15' fill='{col}' "
                      f"text-anchor='start' font-weight='700'>hits: {int(collisions)}</text>")
-        if health is not None:                                 # blue health points (top-right)
+        if health is not None:                                  # lives (top-right)
             hmax = int(meta.get("health_max", 3))
             for i in range(hmax):
                 cx = pad + span * scale - 14 - i * 20

@@ -320,83 +320,124 @@ def test_tilecoder_shapes():
 
 
 # --------------------------------------------------------------------------- #
-# Room 5 — partial observability + dynamic obstacles
+# Room 5 — Asteroid Field Crossing (Frogger-style, DQN)
 # --------------------------------------------------------------------------- #
-def test_room5_sensor_lanes_and_wall():
-    env = E.Room5SpaceEscape(vision=3.0, seed=0)
-    env.reset(); env._spawn = lambda: None
-    env.X = 5.0; env.obstacles = []
-    obs = env._obs()                                                # (vx, shots, ready, L, C, R)
-    assert isinstance(obs, tuple) and obs[3:] == (0, 0, 0)          # all lanes clear
-    assert obs[2] == 1                                              # ready to shoot at start
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 1.0, type="debris", hp=1)]
-    assert env._obs()[4] in (2, 3)                                  # centre lane sees debris
-    env.obstacles = [dict(x=6.0, y=env.AGENT_Y + 1.0, type="asteroid", hp=2)]
-    assert env._obs()[5] in (4, 5)                                  # right lane sees asteroid
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 7.0, type="debris", hp=1)]
-    assert env._obs()[4] == 0                                       # beyond vision → clear
-    env.X = 0.2
-    assert env._obs()[3] == 1                                       # left lane off-board → wall
+def test_room5_start_and_observation_shape():
+    env = E.Room5AsteroidField(seed=0)
+    obs = env.reset()
+    assert (env.X, env.Y) == E.Room5AsteroidField.START == (1.0, 5.0)
+    assert obs.shape == (3 + 2 * env.K_NEAREST,)                    # X,Y,lives + K*(dx,dy)
+    assert obs[0] == 1.0 and obs[1] == 5.0 and obs[2] == env.LIVES
+    assert np.all(obs[3:] == env.PAD_VALUE)                         # no obstacles yet → padded
 
 
-def test_room5_collision_penalises_but_continues():
-    env = E.Room5SpaceEscape(vision=3.0, seed=0)
-    env.reset(); env._spawn = lambda: None
-    env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y, type="asteroid", hp=1)]
-    _, r, done = env.step(1)                                        # stay → asteroid hits
-    assert r == -15.0 and not done and env.collisions == 1         # penalty, episode continues
-    assert env.health == env.HEALTH - 1                            # cost one health point
+def test_room5_movement_and_bounds_clip():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.step(E.RIGHT)
+    assert env.X == 1.0 + env.STEP_SIZE and env.Y == 5.0
+    env.X, env.Y = 0.0, 0.0
+    env.step(E.LEFT)                                                # can't go below the floor
+    assert env.X == 0.0
+    env.step(E.DOWN)
+    assert env.Y == 0.0
 
 
-def test_room5_zero_health_is_terminal_failure():
-    env = E.Room5SpaceEscape(vision=3.0, max_steps=999, seed=0)
-    env.reset(); env._spawn = lambda: None; env.X = 5.0
+def test_room5_goal_region_is_terminal_success():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.X, env.Y = 8.8, 5.0
+    _, r, done = env.step(E.RIGHT)                                  # crosses into X>=9, Y in [4,6]
+    assert done and env.is_success() and r == env.STEP_REWARD + env.GOAL_REWARD
+
+
+def test_room5_collision_penalises_resets_but_continues():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.X, env.Y = 5.0, 5.0
+    env.obstacles = [dict(x=5.0, y=5.0, kind="down")]               # sits right on the agent
+    _, r, done = env.step(E.UP)                                     # tiny move, still gets hit
+    assert not done and env.hits == 1 and env.lives == env.LIVES - 1
+    assert r == env.STEP_REWARD + env.COLLISION_REWARD
+    assert (env.X, env.Y) == env.START                              # teleported back
+
+
+def test_room5_zero_lives_is_terminal_failure():
+    env = E.Room5AsteroidField(spawn_prob=0.0, max_steps=999, seed=0)
+    env.reset()
     done, last_r = False, 0.0
-    for _ in range(env.HEALTH):                                     # take HEALTH hits in a row
-        env.obstacles = [dict(x=env.X, y=env.AGENT_Y, type="asteroid", hp=1)]
-        _, last_r, done = env.step(1)
-    assert env.health == 0 and env.collisions == env.HEALTH
-    assert done and last_r <= env.DEATH_REWARD and not env.is_success()   # terminal −100
+    for _ in range(env.LIVES):                                      # take LIVES hits in a row
+        env.obstacles = [dict(x=env.X, y=env.Y, kind="down")]
+        _, last_r, done = env.step(E.UP)
+    assert env.lives == 0 and env.hits == env.LIVES
+    assert done and not env.is_success()
+    assert last_r == env.STEP_REWARD + env.COLLISION_REWARD + env.FAIL_REWARD
 
 
-def test_room5_survival_is_terminal_bonus():
-    env = E.Room5SpaceEscape(vision=3.0, max_steps=2, seed=0)
-    env.reset(); env._spawn = lambda: None; env.X = 5.0; env.obstacles = []
-    env.step(1)
-    _, r, done = env.step(1)                                        # reaches S seconds → survive
-    assert done and r >= env.SURVIVE_REWARD - 1e-6 and env.is_success()  # terminal +100
+def test_room5_timeout_is_terminal_failure():
+    env = E.Room5AsteroidField(spawn_prob=0.0, max_steps=2, seed=0)
+    env.reset()
+    env.step(E.UP)
+    _, r, done = env.step(E.UP)                                     # hits the step cap
+    assert done and not env.is_success() and r == env.STEP_REWARD + env.FAIL_REWARD
 
 
-def test_room5_shooting_and_cooldown():
-    env = E.Room5SpaceEscape(vision=3.0, seed=0)
-    env.reset(); env._spawn = lambda: None; env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="asteroid", hp=1)]
-    _, r, _ = env.step(3)                                           # asteroid dies in ONE shot now
-    assert r == env.DESTROY_REWARD and env.shots == env.N_SHOTS - 1 and not env.obstacles
-    assert env.cooldown == env.SHOT_COOLDOWN                        # cooldown started
-    # cannot fire again until the cooldown elapses
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + 2.0, type="debris", hp=1)]
-    _, r_cd, _ = env.step(3)                                        # on cooldown → no-op
-    assert r_cd == 0.0 and env.obstacles and env.obstacles[0]["hp"] == 1
-    for _ in range(env.SHOT_COOLDOWN - 1):                          # wait out the rest of it
-        env.step(1)
-    env.obstacles[0]["x"] = env.X; env.obstacles[0]["y"] = env.AGENT_Y + 2.0
-    _, r2, _ = env.step(3)                                          # cooldown elapsed → destroy
-    assert r2 == env.DESTROY_REWARD and not env.obstacles
+def test_room5_nearest_k_relative_positions_and_padding():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.X, env.Y = 5.0, 5.0
+    env.obstacles = [dict(x=6.0, y=6.0, kind="up"), dict(x=5.5, y=5.5, kind="down")]
+    obs = env._obs()
+    # nearest first: the (5.5,5.5) obstacle is closer than (6.0,6.0)
+    assert obs[3] == 0.5 and obs[4] == 0.5
+    assert obs[5] == 1.0 and obs[6] == 1.0
+    assert np.all(obs[7:] == env.PAD_VALUE)                         # only 2 obstacles → rest padded
 
 
-def test_room5_edge_penalty_and_shot_visibility():
-    env = E.Room5SpaceEscape(vision=3.0, seed=0)
-    env.reset(); env._spawn = lambda: None
-    env.X = 0.2; env.Vx = 0.0; env.obstacles = []
-    _, r, _ = env.step(1)                                           # hugging the left wall
-    assert r == env.EDGE_PENALTY
-    # a shot can't destroy an obstacle beyond the ship's vision
-    env.reset(); env._spawn = lambda: None; env.X = 5.0
-    env.obstacles = [dict(x=5.0, y=env.AGENT_Y + env.vision + 2.0, type="debris", hp=1)]
-    _, r2, _ = env.step(3)                                          # fire at an unseen obstacle
-    assert r2 == 0.0 and env.obstacles and env.obstacles[0]["hp"] == 1
+def test_room5_lanes_alternate_and_tile_the_field():
+    env = E.Room5AsteroidField(seed=0)
+    lanes = env.lanes
+    assert len(lanes) == env.N_LANES == 8
+    assert lanes[0]["x_lo"] == env.LANE_START_X == 1.0
+    assert lanes[-1]["x_hi"] == env.GOAL_X == 9.0                    # lanes tile [1, 9) exactly
+    for i, lane in enumerate(lanes):                                 # alternating down/up
+        assert lane["dir"] == ("down" if i % 2 == 0 else "up")
+    assert all(not lane["hard"] for lane in lanes if lane["x_lo"] < env.HALFWAY_X)
+    assert all(lane["hard"] for lane in lanes if lane["x_lo"] >= env.HALFWAY_X)
+
+
+def test_room5_spawn_is_centred_single_file_and_capped_per_lane():
+    env = E.Room5AsteroidField(spawn_prob=1.0, speed=0.1, seed=0)
+    env.reset()
+    env._spawn()                                                     # p=1.0 → every lane spawns
+    assert len(env.obstacles) == env.N_LANES
+    for o, lane in zip(sorted(env.obstacles, key=lambda o: o["x"]), env.lanes):
+        assert o["x"] == (lane["x_lo"] + lane["x_hi"]) / 2.0          # straight line, lane centre
+        assert o["kind"] == lane["dir"] and o["hard"] == lane["hard"]
+        assert o["y"] == (10.0 if lane["dir"] == "down" else 0.0)
+    for _ in range(20):                                              # keep spawning, p=1.0 each time
+        env._spawn()
+    counts = {}
+    for o in env.obstacles:
+        counts[o["lane"]] = counts.get(o["lane"], 0) + 1
+    assert all(c <= env.MAX_PER_LANE for c in counts.values())        # never exceeds the cap
+
+
+def test_room5_hard_lanes_move_faster():
+    env = E.Room5AsteroidField(spawn_prob=0.0, speed=0.1, seed=0)
+    env.reset()
+    env.obstacles = [dict(x=1.5, y=5.0, kind="down", hard=False),
+                     dict(x=6.5, y=5.0, kind="up", hard=True)]
+    env._move_obstacles()
+    assert env.obstacles[0]["y"] == 5.0 - env.speed                   # normal lane
+    assert env.obstacles[1]["y"] == 5.0 + env.speed * env.HARD_MULT   # hard lane: 20% faster
+
+
+def test_room5_random_room_reseeds_and_resets():
+    env = E.Room5AsteroidField(spawn_prob=0.12, speed=0.15, seed=0)
+    env.step(E.RIGHT)
+    env.random_room(seed=99)
+    assert (env.X, env.Y) == env.START and env.lives == env.LIVES and env.obstacles == []
 
 
 # --------------------------------------------------------------------------- #

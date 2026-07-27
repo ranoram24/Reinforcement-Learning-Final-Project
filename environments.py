@@ -1042,206 +1042,189 @@ class Room4Garage:
 
 
 # --------------------------------------------------------------------------- #
-# Room 5 — The Space Escape (Star Wars) — dynamic obstacles + partial observ.
+# Room 5 — The Asteroid Field Crossing (Star Wars) — Frogger-style DQN crossing
 # --------------------------------------------------------------------------- #
-class Room5SpaceEscape:
-    """Star-Wars gauntlet.  A ship that moves only on X must survive S seconds
-    against a DYNAMIC stream of falling obstacles — each wave spawns UP TO
-    SPAWN_MAX obstacles at once (random position + type; no on-screen cap).  It
-    carries N_SHOTS laser shots; a shot damages the nearest obstacle aligned
-    with its column (± SHOT_DX leniency), and destroying one pays +DESTROY_REWARD.
-    Partial observation: beyond its own (position, velocity) the ship senses
-    obstacles only up to `vision` metres ahead, centre-to-centre — a deliberate
-    POMDP solved with tabular Q-Learning over a discretised look-ahead sensor.
+class Room5AsteroidField:
+    """Star-Wars asteroid field.  Hezki's escape pod must cross the 10×10 m
+    arena from the middle-left start to a middle-right goal region — Frogger-
+    style — dodging a bank of vertical traffic lanes on foot.  There is no
+    shooting; the only actions are the four cardinal moves.
 
-    The ship has HEALTH hit-points; each collision costs one.  Running out of
-    health ENDS the episode as a TERMINAL failure (DEATH_REWARD = −100).
-    Surviving the full S seconds ENDS it as a TERMINAL success
-    (SURVIVE_REWARD = +100).
+    The field between the start column (X<1) and the goal column (X≥9) is
+    divided into N_LANES fixed, LANE_WIDTH-wide vertical lanes (X=1..2, 2..3,
+    … 8..9), ALTERNATING direction — lane 0 falls (spawns at Y=10, moves down),
+    lane 1 rises (spawns at Y=0, moves up), lane 2 falls, and so on.  Lanes
+    whose left edge is past the halfway line (X ≥ HALFWAY_X) are HARD lanes:
+    both their spawn rate and their asteroid speed are HARD_MULT times the
+    base rate/speed, so the second half of the crossing is the harder one.
 
-    Obstacles (all width 0.5):
-      • spaceship debris — fall speed 6, drifts sideways as it falls, 1 shot, −25 on hit
-      • asteroid         — fall speed 3, falls straight,               1 shot, −15 on hit
-    Each shot has a SHOT_COOLDOWN-step cooldown; destroying an obstacle pays +DESTROY_REWARD.
+    A hit (centre-to-centre distance < COLLIDE_DIST) costs one life, pays
+    COLLISION_REWARD, and teleports Hezki straight back to the start — the
+    episode CONTINUES (not terminal).  Losing the 3rd life, or exceeding
+    MAX_STEPS, ends the episode as a TERMINAL failure (FAIL_REWARD).  Reaching
+    the goal region ends it as a TERMINAL success (GOAL_REWARD).  Every step
+    costs STEP_REWARD, so a faster crossing scores higher.
+
+    Observation (fixed-size 1-D array, built for a DQN):
+      [X, Y, lives, (dx, dy) of the K_NEAREST closest asteroids — centre of
+      Hezki to centre of the asteroid, nearest-first, PAD_VALUE-padded when
+      fewer than K_NEAREST asteroids are on the board].
     """
 
-    NAME = "Room 5 · The Space Escape"
-    MOVIE = "Star Wars (1977)"
-    ALGO = "Tabular Q-Learning over a partial-observation sensor"
-    DT = 0.02
-    AGENT_Y = 1.5
-    SPAWN_MAX = 4            # up to this many obstacles spawn per wave (no on-screen cap)
-    HEALTH = 3              # hit-points; hitting 0 = failure (episode still finishes)
-    N_SHOTS = 4
-    SHOT_COOLDOWN = 5         # steps the agent must wait between shots
-    DEBRIS_MOVE_PROB = 0.30  # per-step chance a debris also drifts left/right (diagonal fall)
-    EDGE_PENALTY = -5.0      # per-step penalty for hugging a wall
-    EDGE_MARGIN = 0.5        # how close to a wall counts as "hugging the edge"
-    OBS_WIDTH = 0.5
-    COLLIDE_DX = 0.5           # |Δx| for an obstacle to hit the ship
-    SHOT_DX = 0.5             # |Δx| leniency for a laser to connect
-    DESTROY_REWARD = 30.0
-    DEATH_REWARD = -100.0    # terminal: health hits 0
-    SURVIVE_REWARD = 100.0   # terminal: survived the full S seconds
-    TYPES = {                 # length, fall speed, hit-points (shots to kill), collision reward
-        "debris":   dict(length=0.5, speed=6.0, hp=1, collide=-25.0),
-        "asteroid": dict(length=0.5, speed=3.0, hp=1, collide=-15.0),
-    }
+    NAME = "Room 5 · The Asteroid Field Crossing"
+    MOVIE = "Star Wars"
+    ALGO = "Deep Q-Network (DQN)"
+    START = (1.0, 5.0)
+    GOAL_X = 9.0
+    GOAL_Y_LO, GOAL_Y_HI = 4.0, 6.0
+    STEP_SIZE = 0.2                  # metres moved per action
+    OBS_WIDTH = 0.5                  # asteroid width/diameter
+    COLLIDE_DIST = 0.5               # centre-to-centre distance that counts as a hit
+    LIVES = 3
+    K_NEAREST = 4
+    PAD_VALUE = 100.0                # padding for "no obstacle here"
+    LANE_START_X = 1.0               # lanes tile X ∈ [1, 9) — 1 unit wide each
+    LANE_WIDTH = 1.0
+    N_LANES = 8
+    HALFWAY_X = 5.0                  # lanes with x_lo >= this are the HARD (right) half
+    HARD_MULT = 1.2                  # spawn-rate & speed multiplier in hard lanes
+    MAX_PER_LANE = 4                 # at most this many asteroids alive in one lane at once
 
-    def __init__(self, vision=3.0, spawn_every=15, v_max=3.0,
-                 max_steps=500, seed=None, speed_mult=1.0, debris_prob=0.5):
-        self.vision = float(vision)
-        self.spawn_every = int(spawn_every)
-        self.v_max = float(v_max)
+    STEP_REWARD = -1.0
+    COLLISION_REWARD = -50.0
+    FAIL_REWARD = -300.0             # terminal: 0 lives left, or ran out of time
+    GOAL_REWARD = 1000.0             # terminal: reached the goal region
+
+    def __init__(self, spawn_prob=0.12, speed=0.15, max_steps=500, seed=None, **_legacy):
+        self.spawn_prob = float(spawn_prob)   # P(a new asteroid spawns), per lane, per step
+        self.speed = float(speed)             # metres/step an asteroid travels (base)
         self.max_steps = int(max_steps)
-        self.speed_mult = float(speed_mult)   # global fall-speed scale (random rooms vary it)
-        self.debris_prob = float(debris_prob) # P(debris) vs asteroid at spawn
+        self.n_actions = 4                    # Up · Down · Left · Right
+        self.actions = [UP, DOWN, LEFT, RIGHT]
+        self.state_low = np.array([0.0, 0.0, 0.0] + [-10.0, -10.0] * self.K_NEAREST)
+        self.state_high = np.array([10.0, 10.0, float(self.LIVES)]
+                                   + [self.PAD_VALUE, self.PAD_VALUE] * self.K_NEAREST)
+        self.lanes = self._build_lanes()
         self.rng = np.random.default_rng(seed)
-        self.n_actions = 4                    # 0 left · 1 stay · 2 right · 3 shoot
-        self.actions = [0, 1, 2, 3]
-        self._survived = False
+        self._succeeded = False
         self.reset()
 
+    def _build_lanes(self):
+        """N_LANES fixed 1-wide lanes tiling X ∈ [LANE_START_X, 9), alternating
+        direction; lanes at/past HALFWAY_X are HARD (faster & denser)."""
+        lanes = []
+        for i in range(self.N_LANES):
+            x_lo = self.LANE_START_X + i * self.LANE_WIDTH
+            lanes.append(dict(x_lo=x_lo, x_hi=x_lo + self.LANE_WIDTH,
+                              dir="down" if i % 2 == 0 else "up",
+                              hard=x_lo >= self.HALFWAY_X))
+        return lanes
+
     def reset(self):
-        self.X = 5.0
-        self.Vx = 0.0
-        self.obstacles = []                   # dicts: x, y(centre), type, hp
-        self.shots = self.N_SHOTS
-        self.health = self.HEALTH             # hit-points; 0 = failure
-        self.cooldown = 0                     # steps until the laser can fire again
-        self._fired = False                  # did a shot fire THIS step? (for the viz)
+        self.X, self.Y = self.START
+        self.lives = self.LIVES
+        self.obstacles = []                   # dicts: x, y (centre), kind ("down"/"up"), hard
         self.t = 0
-        self.collisions = 0
-        self.destroyed = 0
-        self._survived = False
+        self.hits = 0
+        self._succeeded = False
         return self._obs()
 
     def random_room(self, seed=None):
-        """Fresh episode with a new random obstacle stream (test button)."""
-        self.rng = np.random.default_rng(seed)
+        """Fresh episode with re-randomised traffic density & speed (post-training test)."""
+        rng = np.random.default_rng(seed)
+        self.spawn_prob = float(rng.uniform(0.06, 0.24))
+        self.speed = float(rng.uniform(0.10, 0.28))
+        self.rng = rng
         return self.reset()
 
+    # ---- dynamics ---------------------------------------------------------- #
     def _spawn(self):
-        """A wave: spawn 1..SPAWN_MAX obstacles at once (random x + type)."""
-        for _ in range(int(self.rng.integers(1, self.SPAWN_MAX + 1))):
-            kind = "debris" if self.rng.random() < self.debris_prob else "asteroid"
-            self.obstacles.append(dict(x=float(self.rng.uniform(0.5, 9.5)), y=10.0,
-                                       type=kind, hp=self.TYPES[kind]["hp"]))
-
-    # ---- shooting -------------------------------------------------------- #
-    def _shoot(self):
-        """Fire a laser up the ship's column, if ready (off cooldown + ammo left).
-        Damages the nearest column-aligned obstacle, +DESTROY_REWARD on a kill.
-        Firing spends a shot and starts a SHOT_COOLDOWN-step cooldown."""
-        if self.cooldown > 0 or self.shots <= 0:
-            return 0.0                        # not ready → no shot
-        self.shots -= 1
-        self.cooldown = self.SHOT_COOLDOWN
-        self._fired = True
-        target, best_dy = None, np.inf
-        for o in self.obstacles:                             # only what the ship can SEE
-            dy = o["y"] - self.AGENT_Y
-            if 0.0 < dy <= self.vision and abs(o["x"] - self.X) <= self.SHOT_DX and dy < best_dy:
-                best_dy, target = dy, o
-        if target is None:
-            return 0.0                        # missed — laser still spent
-        target["hp"] -= 1
-        if target["hp"] <= 0:
-            self.obstacles.remove(target)
-            self.destroyed += 1
-            return self.DESTROY_REWARD
-        return 0.0
-
-    def _ready(self):
-        return self.cooldown == 0 and self.shots > 0
-
-    def valid_actions(self, obs):
-        """Mask the shoot action while on cooldown / out of ammo (obs[2] = ready)."""
-        return [0, 1, 2, 3] if obs[2] else [0, 1, 2]
-
-    # ---- discretised look-ahead sensor ----------------------------------- #
-    def _lane(self, lo, hi):
-        """Nearest obstacle whose Δx is in [lo,hi) and within `vision` ahead:
-        0 clear · 1 wall (off-board) · 2/3 debris far/near · 4/5 asteroid far/near."""
-        if self.X + (lo + hi) / 2.0 < 0.0 or self.X + (lo + hi) / 2.0 > 10.0:
-            return 1
-        best_dy, best_type = None, None
+        """Each lane spawns straight down its own centre-line (single file),
+        capped at MAX_PER_LANE asteroids alive in that lane at once."""
+        counts = [0] * self.N_LANES
         for o in self.obstacles:
-            if lo <= (o["x"] - self.X) < hi:
-                dy = o["y"] - self.AGENT_Y
-                if 0.0 <= dy <= self.vision and (best_dy is None or dy < best_dy):
-                    best_dy, best_type = dy, o["type"]
-        if best_dy is None:
-            return 0
-        near = best_dy < self.vision * 0.5
-        if best_type == "debris":
-            return 3 if near else 2
-        return 5 if near else 4
+            i = o.get("lane")
+            if i is not None:
+                counts[i] += 1
+        for i, lane in enumerate(self.lanes):
+            if counts[i] >= self.MAX_PER_LANE:
+                continue
+            p = min(1.0, self.spawn_prob * (self.HARD_MULT if lane["hard"] else 1.0))
+            if self.rng.random() < p:
+                y0 = 10.0 if lane["dir"] == "down" else 0.0
+                cx = (lane["x_lo"] + lane["x_hi"]) / 2.0
+                self.obstacles.append(dict(x=cx, y=y0, kind=lane["dir"],
+                                           hard=lane["hard"], lane=i))
 
-    def _obs(self):
-        vx = 0 if abs(self.Vx) < 0.5 else (1 if self.Vx > 0 else 2)
-        return (vx, int(self.shots), int(self._ready()),
-                self._lane(-1.5, -0.5), self._lane(-0.5, 0.5), self._lane(0.5, 1.5))
-
-    def encode(self, obs):
-        return tuple(obs)                     # the sensor is already discrete
-
-    def step(self, a):
-        reward = 0.0
-        self._fired = False
-        if a == 3:
-            reward += self._shoot()
-        else:
-            self.Vx = float(np.clip(self.Vx + (a - 1), -self.v_max, self.v_max))
-        self.X = float(np.clip(self.X + self.Vx * self.DT, 0.0, 10.0))
-        if self.X < self.EDGE_MARGIN or self.X > 10.0 - self.EDGE_MARGIN:
-            reward += self.EDGE_PENALTY       # discourage hugging a wall
-
-        for o in self.obstacles:              # fall (per-type speed × room scale)
-            fall = self.TYPES[o["type"]]["speed"] * self.speed_mult * self.DT
-            o["y"] -= fall
-            if o["type"] == "debris" and self.rng.random() < self.DEBRIS_MOVE_PROB:
-                drift = fall if self.rng.random() < 0.5 else -fall   # 50/50 left/right
-                o["x"] = float(np.clip(o["x"] + drift, 0.0, 10.0))
-
-        survivors = []                        # collisions with the ship
+    def _move_obstacles(self):
+        survivors = []
         for o in self.obstacles:
-            half = self.TYPES[o["type"]]["length"] / 2.0
-            if (abs(o["x"] - self.X) <= self.COLLIDE_DX
-                    and (o["y"] - half) <= self.AGENT_Y <= (o["y"] + half)):
-                reward += self.TYPES[o["type"]]["collide"]
-                self.collisions += 1          # obstacle consumed on impact
-                self.health = max(0, self.health - 1)
-            elif o["y"] > 0.0:                # keep only obstacles still on the board
+            step = self.speed * (self.HARD_MULT if o.get("hard") else 1.0)
+            o["y"] += -step if o["kind"] == "down" else step
+            if 0.0 <= o["y"] <= 10.0:         # off the board → despawn
                 survivors.append(o)
         self.obstacles = survivors
-        self.t += 1
 
-        if self.health <= 0:                  # out of health → TERMINAL failure (−100)
-            return self._obs(), reward + self.DEATH_REWARD, True
-        if not self._fired:                   # tick the shot cooldown down
-            self.cooldown = max(0, self.cooldown - 1)
-        if self.t >= self.max_steps:          # survived the full S seconds → TERMINAL success (+100)
-            self._survived = True
-            return self._obs(), reward + self.SURVIVE_REWARD, True
-        if self.t % self.spawn_every == 0:    # dynamic spawn (up to SPAWN_MAX at once)
-            self._spawn()
+    def _nearest_k(self):
+        """(dx, dy) of the K_NEAREST closest asteroids, nearest first, centre
+        of Hezki to centre of the asteroid — PAD_VALUE-padded when short."""
+        ordered = sorted(self.obstacles,
+                         key=lambda o: (o["x"] - self.X) ** 2 + (o["y"] - self.Y) ** 2)
+        feats = []
+        for o in ordered[:self.K_NEAREST]:
+            feats += [o["x"] - self.X, o["y"] - self.Y]
+        while len(feats) < 2 * self.K_NEAREST:
+            feats.append(self.PAD_VALUE)
+        return feats
+
+    def _obs(self):
+        return np.array([self.X, self.Y, float(self.lives)] + self._nearest_k(), dtype=float)
+
+    def _in_goal(self):
+        return self.X >= self.GOAL_X and self.GOAL_Y_LO <= self.Y <= self.GOAL_Y_HI
+
+    def step(self, a):
+        dx, dy = _DELTA[a]
+        self.X = float(np.clip(self.X + dx * self.STEP_SIZE, 0.0, 10.0))
+        self.Y = float(np.clip(self.Y + dy * self.STEP_SIZE, 0.0, 10.0))
+        self.t += 1
+        reward = self.STEP_REWARD
+
+        if self._in_goal():                   # reached the goal → TERMINAL success (+1000)
+            self._succeeded = True
+            return self._obs(), reward + self.GOAL_REWARD, True
+
+        self._move_obstacles()
+        hit = next((o for o in self.obstacles if (o["x"] - self.X) ** 2
+                    + (o["y"] - self.Y) ** 2 < self.COLLIDE_DIST ** 2), None)
+        if hit is not None:                   # collision → lose a life, back to start
+            self.hits += 1
+            self.lives -= 1
+            reward += self.COLLISION_REWARD
+            self.X, self.Y = self.START
+            if self.lives <= 0:                # 0 lives → TERMINAL failure (−300)
+                return self._obs(), reward + self.FAIL_REWARD, True
+
+        if self.t >= self.max_steps:          # ran out of time → TERMINAL failure (−300)
+            return self._obs(), reward + self.FAIL_REWARD, True
+
+        self._spawn()
         return self._obs(), reward, False
 
     def is_success(self):
-        # "escaped" = survived the full S seconds with health left (took < HEALTH hits)
-        return self._survived and self.health > 0
+        return self._succeeded
 
     def render_frame(self):
-        return {"agent": (self.X, self.AGENT_Y), "shots": self.shots,
-                "fired": self._fired, "cooldown": self.cooldown, "health": self.health,
-                "collisions": self.collisions, "destroyed": self.destroyed,
-                "obstacles": [(o["x"], o["y"], o["type"], o["hp"]) for o in self.obstacles]}
+        return dict(agent=(self.X, self.Y), health=self.lives, collisions=self.hits,
+                    obstacles=[(o["x"], o["y"], o["kind"], o["hard"]) for o in self.obstacles])
 
     def render_meta(self):
-        return dict(kind="space", bounds=(0.0, 10.0, 0.0, 10.0),
-                    agent_y=self.AGENT_Y, obs_width=self.OBS_WIDTH,
-                    vision=self.vision, n_shots=self.N_SHOTS, health_max=self.HEALTH)
+        return dict(kind="asteroid_field", bounds=(0.0, 10.0, 0.0, 10.0),
+                    start=self.START, goal_x=self.GOAL_X,
+                    goal_y=(self.GOAL_Y_LO, self.GOAL_Y_HI), lanes=self.lanes,
+                    halfway_x=self.HALFWAY_X, health_max=self.LIVES,
+                    obs_width=self.OBS_WIDTH, goal_reward=self.GOAL_REWARD,
+                    collision_reward=self.COLLISION_REWARD, fail_reward=self.FAIL_REWARD)
 
 
 # --------------------------------------------------------------------------- #
@@ -1252,5 +1235,5 @@ ROOM_REGISTRY = [
     dict(key="room2", cls=Room2DarkTemple,    stars=2, emoji="🏛️"),
     dict(key="room3", cls=Room3CloningLab,    stars=3, emoji="🕶️"),
     dict(key="room4", cls=Room4Garage,        stars=4, emoji="🏎️"),
-    dict(key="room5", cls=Room5SpaceEscape,   stars=5, emoji="🚀"),
+    dict(key="room5", cls=Room5AsteroidField, stars=5, emoji="🚀"),
 ]
