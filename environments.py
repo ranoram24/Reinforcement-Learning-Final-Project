@@ -209,7 +209,7 @@ class Room1FrozenArchive:
         "...~~....S",
         ".##..####.",
         ".##..#K##.",
-        "~....a~...",
+        "~.....~...",
         ".#########",
         ".....~..~~",
         ".~~##b##~c",
@@ -414,9 +414,9 @@ class Room2DarkTemple:
     ALGO = "Q-Learning (off-policy TD control)"
     SIZE = 10
     STEP_REWARD = 0.0
-    EXIT_REWARD = 200000.0
-    CATCH_REWARD = -100000.0
-    BUTTON_REWARD = 10000.0        # pressing the plate pays once, then it's gone
+    EXIT_REWARD = 2000.0
+    CATCH_REWARD = -1000.0
+    BUTTON_REWARD = 1000.0        # pressing the plate pays once, then it's gone
 
     # row 0 = top.  '.' blank  '#' wall  '~' slippery  'S' start  'E' exit
     # 'D' door  'K' idol/key  'G' treasure  'h' pit −50  'H' pit −100
@@ -433,8 +433,8 @@ class Room2DarkTemple:
         ".######.#.",
         "S#ED....#.",
     ]
-    PICKUPS = {"K": 100000.0, "G": 10000.0}
-    HOLE_REWARD = {"h": -500.0, "H": -1000.0}
+    PICKUPS = {"K": 1000.0, "G": 100.0}
+    HOLE_REWARD = {"h": -50.0, "H": -100.0}
     SLIP = {
         (0, 1): {UP:    [(0.50, UP),    (0.50, DOWN)]},
         (9, 2): {UP:    [(0.60, UP),    (0.40, LEFT)]},

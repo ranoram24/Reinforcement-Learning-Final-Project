@@ -419,9 +419,26 @@ def tab_simulation(key, entry):
         return
 
     if r["kind"] in ("dp", "grid"):
-        st.caption("Arrows are the learned greedy policy · every special tile shows its reward.")
-        embed(board_html(key, meta, agent=meta["start"], policy=entry.get("policy"), fill=True),
-              height=board_h)
+        pol = entry.get("policy")
+        pickups, bits = meta.get("pickups", {}), meta.get("bit", {})
+        key_cell = next((c for c, ch in pickups.items() if ch == "K"), None)
+        if key == "room1" and key_cell is not None and key_cell in bits:
+            key_mask = 1 << bits[key_cell]
+            st.caption("Value Iteration learns a policy for **every** state — and the plan changes "
+                       "once Hezki has the key 🔑 (the gate 🧱 opens). Both greedy policies, side by side:")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Before the key** · gate shut")
+                embed(board_html(key, meta, agent=meta["start"], policy=pol, mask=0),
+                      height=board_h)
+            with c2:
+                st.markdown("**After the key** · gate open")
+                embed(board_html(key, meta, agent=key_cell, policy=pol, mask=key_mask),
+                      height=board_h)
+        else:
+            st.caption("Arrows are the learned greedy policy · every special tile shows its reward.")
+            embed(board_html(key, meta, agent=meta["start"], policy=pol, fill=True),
+                  height=board_h)
     else:
         roll = eval_roll(key, entry, entry["final_policy"], seed=1)
         last = roll["frames"][-1]

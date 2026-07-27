@@ -108,43 +108,76 @@ def evaluate(cls, policy, n=EVAL_ROOMS):
     return 100.0 * escaped / n, float(np.mean(rew))
 
 
+def _rich(seed):
+    return Room5Rich(vision=VISION, spawn_every=SPAWN, v_max=VMAX, max_steps=STEPS, seed=seed)
+
+
+def _disc(seed):
+    return E.Room5SpaceEscape(vision=VISION, spawn_every=SPAWN, v_max=VMAX, max_steps=STEPS, seed=seed)
+
+
 def bench():
+    import extra_algos as X
     rows = []
 
-    print("1/3  Tabular Q-Learning (discrete 3-lane sensor)…", flush=True)
-    t = time.time()
-    env = E.Room5SpaceEscape(vision=VISION, spawn_every=SPAWN, v_max=VMAX, max_steps=STEPS, seed=0)
-    res = A.QLearning(env, alpha=0.1, gamma=0.95, epsilon=1.0, epsilon_k=0.0003,
-                      epsilon_min=0.05, episodes=5000, max_steps=STEPS,
-                      optimistic_init=0.0, seed=0).train(snapshots=1)
-    cr, ar = evaluate(E.Room5SpaceEscape, res["final_policy"])
-    rows.append(("Tabular Q  (discrete sensor)", cr, ar, time.time() - t))
-    print(f"     → escape {cr:.1f}% · avg reward {ar:.1f}", flush=True)
+    def record(name, cls, policy, t0):
+        cr, ar = evaluate(cls, policy)
+        rows.append((name, cr, ar, time.time() - t0))
+        print(f"     → escape {cr:.1f}% · avg reward {ar:.1f}", flush=True)
 
-    print("2/3  Tile-coding linear FA (5-D continuous sensor)…", flush=True)
+    print("1  Tabular Q-Learning (discrete sensor)…", flush=True)
     t = time.time()
-    env = Room5Compact(vision=VISION, spawn_every=SPAWN, v_max=VMAX, max_steps=STEPS, seed=0)
-    res = A.LinearFAAgent(env, alpha=0.3, gamma=0.95, epsilon=1.0, epsilon_k=0.0004,
-                          epsilon_min=0.05, episodes=5000, n_tilings=8, n_bins=6,
-                          optimistic_init=0.0, max_steps=STEPS, seed=0).train(snapshots=1)
-    cr, ar = evaluate(Room5Compact, res["final_policy"])
-    rows.append(("Tile-coding FA  (5-D)", cr, ar, time.time() - t))
-    print(f"     → escape {cr:.1f}% · avg reward {ar:.1f}", flush=True)
+    r = A.QLearning(_disc(0), alpha=0.1, gamma=0.95, epsilon=1.0, epsilon_k=0.0003,
+                    epsilon_min=0.05, episodes=5000, max_steps=STEPS, optimistic_init=0.0,
+                    seed=0).train(snapshots=1)
+    record("Tabular Q-Learning", E.Room5SpaceEscape, r["final_policy"], t)
 
-    print("3/3  DQN — MLP Q-network (rich 14-D sensor)…  [slowest]", flush=True)
+    print("2  SARSA — on-policy tabular (discrete sensor)…", flush=True)
     t = time.time()
-    env = Room5Rich(vision=VISION, spawn_every=SPAWN, v_max=VMAX, max_steps=STEPS, seed=0)
-    res = A.DQNAgent(env, alpha=1e-3, gamma=0.95, epsilon=1.0, epsilon_k=0.004,
-                     epsilon_min=0.05, episodes=1200, max_steps=STEPS, hidden=128,
-                     batch=64, target_every=500, train_freq=4, warmup=1000,
-                     seed=0).train(snapshots=1)
-    cr, ar = evaluate(Room5Rich, res["final_policy"])
-    rows.append(("DQN  (14-D MLP)", cr, ar, time.time() - t))
-    print(f"     → escape {cr:.1f}% · avg reward {ar:.1f}", flush=True)
+    r = A.Sarsa(_disc(0), alpha=0.1, gamma=0.95, epsilon=1.0, epsilon_k=0.0003,
+                epsilon_min=0.05, episodes=5000, max_steps=STEPS, optimistic_init=0.0,
+                seed=0).train(snapshots=1)
+    record("SARSA (on-policy)", E.Room5SpaceEscape, r["final_policy"], t)
 
-    print(f"\n=== Room 5 approximator comparison — escape rate on {EVAL_ROOMS} random rooms ===")
+    print("3  Dyna-Q — model-based tabular (discrete sensor)…", flush=True)
+    t = time.time()
+    pol = X.train_dyna_q(_disc, episodes=5000, planning=5, seed=0)
+    record("Dyna-Q (model-based)", E.Room5SpaceEscape, pol, t)
+
+    print("4  Tile-coding linear FA (5-D continuous)…", flush=True)
+    t = time.time()
+    r = A.LinearFAAgent(Room5Compact(vision=VISION, spawn_every=SPAWN, v_max=VMAX,
+                        max_steps=STEPS, seed=0), alpha=0.3, gamma=0.95, epsilon=1.0,
+                        epsilon_k=0.0004, epsilon_min=0.05, episodes=5000, n_tilings=8,
+                        n_bins=6, optimistic_init=0.0, max_steps=STEPS, seed=0).train(snapshots=1)
+    record("Tile-coding FA", Room5Compact, r["final_policy"], t)
+
+    print("5  DQN — MLP Q-network (rich 14-D)…", flush=True)
+    t = time.time()
+    r = A.DQNAgent(_rich(0), alpha=5e-4, gamma=0.97, epsilon=1.0, epsilon_k=0.0015,
+                   epsilon_min=0.05, episodes=4000, max_steps=STEPS, hidden=128, batch=128,
+                   target_every=1000, train_freq=2, warmup=2000, seed=0).train(snapshots=1)
+    record("DQN (14-D MLP)", Room5Rich, r["final_policy"], t)
+
+    print("6  REINFORCE — MC policy gradient (rich 14-D)…", flush=True)
+    t = time.time()
+    record("REINFORCE", Room5Rich, X.train_reinforce(_rich, episodes=2500, seed=0), t)
+
+    print("7  A2C — advantage actor-critic (rich 14-D)…", flush=True)
+    t = time.time()
+    record("A2C", Room5Rich, X.train_a2c(_rich, episodes=2500, seed=0), t)
+
+    print("8  PPO — clipped actor-critic + GAE (rich 14-D)…  [slowest]", flush=True)
+    t = time.time()
+    record("PPO", Room5Rich, X.train_ppo(_rich, updates=250, seed=0), t)
+
+    print(f"\n=== Room 5 algorithm comparison — escape rate on {EVAL_ROOMS} random rooms ===")
     for name, cr, ar, el in sorted(rows, key=lambda r: -r[1]):
-        print(f"  {name:32s} escape {cr:5.1f}%   avg reward {ar:8.1f}   (train {el:.0f}s)")
+        print(f"  {name:24s} escape {cr:5.1f}%   avg reward {ar:8.1f}   (train {el:.0f}s)")
+    print("\n  N/A (not applicable to this task):")
+    print("  SAC / DDPG / TD3   — continuous-action algorithms; Room 5 actions are discrete")
+    print("  AlphaZero          — needs a known enumerable model + MCTS (state is continuous)")
+    print("  RLHF               — LLM alignment over token sequences; unrelated to control")
 
 
 if __name__ == "__main__":
