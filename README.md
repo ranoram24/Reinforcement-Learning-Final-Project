@@ -187,28 +187,42 @@ middle-right goal region, dodging two lanes of vertical asteroid traffic. There 
 * **Actions** 4 discrete moves — Up / Down / Left / Right — each a fixed `0.2 m` step.
 * **Traffic** the field between the start column (`X<1`) and the goal column (`X≥9`) is tiled by
   **8 fixed, 1 m-wide lanes** that alternate direction — lane `X∈[1,2)` falls (grey, spawns at
-  `Y=10`), `X∈[2,3)` rises (blue, spawns at `Y=0`), `X∈[3,4)` falls, … The 4 lanes on the far side
-  of the halfway line (`X≥5`) are **hard lanes**: both their spawn probability and their asteroid
-  speed are **20 % higher**, so the second half of the crossing is the tougher one. The board
-  labels each lane `d`/`u` (normal) or `D`/`U` (hard) so the direction and difficulty are visible
-  at a glance.
+  `Y=10`), `X∈[2,3)` rises (blue, spawns at `Y=0`), `X∈[3,4)` falls, … Each lane spawns straight
+  down its own centre-line (single file), capped at **2 asteroids per lane** at once. The 4 lanes
+  on the far side of the halfway line (`X≥5`) are **hard lanes**: both their spawn probability and
+  their asteroid speed are **20 % higher**, so the second half of the crossing is the tougher one.
+  The board labels each lane `d`/`u` (normal) or `D`/`U` (hard) so the direction and difficulty are
+  visible at a glance.
 * **State (fixed-size, for the DQN)** `[X, Y, lives, (dx, dy) of the 4 closest asteroids]` —
   11 numbers total. Relative positions are measured **centre-to-centre** (Hezki → asteroid);
   padded with `100.0` when fewer than 4 asteroids are on the board.
 * **Learner** a **Deep Q-Network** (PyTorch): a small MLP `Q(s,·)`, an experience **replay
   buffer**, and a periodically-synced **target network** (Mnih et al., 2015) — genuine neural
   function approximation, since the 11-D continuous state is far too large to tabulate.
-* **Lives** `3`. A hit (`distance < 0.5 m` to an asteroid centre) costs one life, pays `−50`,
-  and teleports Hezki back to the start — **the episode continues**. `0` lives, or exceeding the
-  `500`-step cap, ends the episode as a terminal failure (`−300`). Reaching the goal ends it as a
-  terminal success (`+1000`). Every step costs `−1`.
+* **Lives** `3`. A hit (`distance < 0.5 m` to an asteroid centre) costs one life and pays `−50` —
+  the asteroid is destroyed and Hezki stays exactly where he is (no reset/teleport) — **the
+  episode continues**. `0` lives, or exceeding the `500`-step cap, ends the episode as a terminal
+  failure (`−300`). Reaching the goal ends it as a terminal success (`+1000`). Every step costs `−1`.
+* **Exploration shaping** — a plain `−1`/step lets a DQN learn the "safe" degenerate policy of
+  never leaving the start, so three extra terms push it to actually cross:
+  * `+100` the first time EACH lane is reached (a new furthest-lane record for the episode) —
+    retreating and re-entering an already-reached lane pays nothing again.
+  * `−5`/step whenever the action is fully blocked by a wall/board edge (no actual movement).
+  * `−20`/step while camping within `0.5 m` of the left wall (`X<0.5`, behind the start column) —
+    directly discourages "hide at the wall and never engage the first lane."
+* **Observation control — circular radar** — beyond its own position and lives, the agent senses
+  the 4 nearest asteroids only once each enters a **detection circle of tunable radius `vision`**
+  (sidebar slider) centred on Hezki; an asteroid's `(dx, dy)` — centre-to-centre — is computed
+  only inside that circle, and `100.0`-padded otherwise. A genuine partial-observation sensor,
+  not full board knowledge, per the assignment's Observation-control requirement.
 * **Charts** reward per episode, ε-decay, and episode-duration moving average.
 * **Extras** the sidebar exposes the DQN hyperparameters (learning rate, γ, batch size, ε-decay,
-  target-update frequency, hidden units) plus the traffic knobs (spawn probability, asteroid
-  speed), and a **“Generate Random Room & Test Policy”** button that re-randomises the traffic
-  and runs the learned policy on a field it never trained on.
+  target-update frequency, hidden units), the `vision` radar radius, and the traffic knobs
+  (spawn probability, asteroid speed), plus a **“Generate Random Room & Test Policy”** button
+  that re-randomises the traffic (keeping `vision` fixed as trained) and runs the learned policy
+  on a field it never trained on.
 * **Good hyperparameters** `LR = 1e-3`, `γ = 0.98`, `batch = 64`, `ε₀ = 1.0`, `ε-decay K = 0.0015`,
-  `ε_min = 0.05`, `target update = 500 steps`, `hidden = 128`, `episodes ≈ 1500`,
+  `ε_min = 0.05`, `target update = 500 steps`, `hidden = 128`, `episodes ≈ 1500`, `vision = 4.0`,
   `spawn prob = 0.12`, `speed = 0.15` → a rising, non-trivial success rate (this room is
   deliberately the hardest of the five — dodging is genuinely harder than the earlier rooms'
   known/tabular problems).
@@ -239,10 +253,10 @@ deliberate; each keeps the pedagogical goal intact.
 4. **Velocity is clipped** to `±v_max` in Room 4 (the brief’s `V ← V + a` is otherwise
    unbounded). The brief’s docx describes velocity as discrete; the MD spec describes
    *acceleration* actions with accumulating velocity — we follow the MD (richer, momentum-based).
-5. **Room 5's "radar" is unbounded, not range-limited.** The brief mentions padding when fewer
-   than K obstacles are "within radar range"; since no range is specified we track the K=4
-   globally-nearest asteroids and pad with `100.0` when fewer exist — the simplest reading that
-   satisfies the letter of the requirement.
+5. **Room 5's sensor is a genuine circular radar.** `vision` (sidebar slider) is the radius of a
+   detection circle centred on Hezki; an asteroid's `(dx, dy)` is only computed and placed in the
+   state once it enters that circle (Euclidean distance ≤ `vision`), and `100.0`-padded otherwise
+   — exactly the brief's "padding when fewer than K obstacles are within radar range."
 6. **Levels were redesigned as a difficulty ramp.** Rather than the brief's scattered
    coordinates, each grid is an intentional, movie-themed level whose hazards escalate
    (Room 1: ice only → Room 2: pits + mud → Room 3: cliff of clones). Each cell shows its

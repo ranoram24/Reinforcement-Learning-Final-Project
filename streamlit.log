@@ -1,7 +1,7 @@
 
 Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
 
-2026-07-27 20:12:49.360 Uvicorn server started on :::8501
+2026-07-27 21:40:24.972 Uvicorn server started on :::8501
 
   You can now view your Streamlit app in your browser.
 
@@ -9,35 +9,93 @@ Collecting usage statistics. To deactivate, set browser.gatherUsageStats to fals
   Network URL: http://10.0.0.35:8501
   External URL: http://79.177.139.165:8501
 
-2026-07-27 20:13:43.803 The widget with key "a5" was created with a default value but also had its value set via the Session State API.
-Stack (most recent call last):
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1012, in _bootstrap
-    self._bootstrap_inner()
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1041, in _bootstrap_inner
-    self.run()
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 992, in run
-    self._target(*self._args, **self._kwargs)
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 418, in _run_script_thread
-    self._run_script(request.rerun_data)
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 832, in _run_script
-    ) = exec_func_with_error_handling(code_to_exec, ctx)
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\runtime\scriptrunner\exec_code.py", line 129, in exec_func_with_error_handling
-    result = func()
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 807, in code_to_exec
-    exec(code, module.__dict__)  # noqa: S102
-  File "C:\Users\shaha\OneDrive\\u05de\u05e1\u05de\u05db\u05d9\u05dd\GitHub\Reinforcement-Learning-Final-Project\app.py", line 851, in <module>
-    main()
-  File "C:\Users\shaha\OneDrive\\u05de\u05e1\u05de\u05db\u05d9\u05dd\GitHub\Reinforcement-Learning-Final-Project\app.py", line 815, in main
-    key, p, train_clicked, random_clicked = sidebar()
-  File "C:\Users\shaha\OneDrive\\u05de\u05e1\u05de\u05db\u05d9\u05dd\GitHub\Reinforcement-Learning-Final-Project\app.py", line 220, in sidebar
-    p["alpha"] = st.sidebar.slider("learning rate (LR)", 0.0001, 0.0100, 0.0010, 0.0001,
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\runtime\metrics_util.py", line 568, in wrapped_func
-    result = non_optional_func(*args, **kwargs)
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\elements\widgets\slider.py", line 748, in slider
-    return self._slider(
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\elements\widgets\slider.py", line 791, in _slider
-    check_widget_policies(
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\elements\lib\policies.py", line 143, in check_widget_policies
-    check_session_state_rules(
-  File "C:\Users\shaha\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\elements\lib\policies.py", line 89, in check_session_state_rules
-    _LOGGER.warning(
+2026-07-27 21:54:37.694 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:54:37.739 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:54:37.775 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:31.805 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:31.842 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:31.877 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:44.488 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:44.532 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:44.567 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:48.539 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:48.560 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:55:48.583 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:19.366 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:19.404 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:19.442 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:34.931 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:34.970 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-27 21:56:35.009 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.

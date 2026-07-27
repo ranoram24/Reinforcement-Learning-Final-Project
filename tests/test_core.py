@@ -351,15 +351,17 @@ def test_room5_goal_region_is_terminal_success():
     assert done and env.is_success() and r == env.STEP_REWARD + env.GOAL_REWARD
 
 
-def test_room5_collision_penalises_resets_but_continues():
+def test_room5_collision_penalises_but_does_not_reset_position():
     env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
     env.reset()
     env.X, env.Y = 5.0, 5.0
+    env._best_lane = env._lane_index(env.X)                         # lane already credited
     env.obstacles = [dict(x=5.0, y=5.0, kind="down")]               # sits right on the agent
     _, r, done = env.step(E.UP)                                     # tiny move, still gets hit
     assert not done and env.hits == 1 and env.lives == env.LIVES - 1
     assert r == env.STEP_REWARD + env.COLLISION_REWARD
-    assert (env.X, env.Y) == env.START                              # teleported back
+    assert (env.X, env.Y) == (5.0, 5.2)                             # stays put — NOT reset to start
+    assert env.obstacles == []                                      # the asteroid is destroyed
 
 
 def test_room5_zero_lives_is_terminal_failure():
@@ -392,6 +394,17 @@ def test_room5_nearest_k_relative_positions_and_padding():
     assert obs[3] == 0.5 and obs[4] == 0.5
     assert obs[5] == 1.0 and obs[6] == 1.0
     assert np.all(obs[7:] == env.PAD_VALUE)                         # only 2 obstacles → rest padded
+
+
+def test_room5_vision_hyperparameter_limits_the_sensor():
+    env = E.Room5AsteroidField(spawn_prob=0.0, vision=2.0, seed=0)
+    env.reset()
+    env.X, env.Y = 5.0, 5.0
+    env.obstacles = [dict(x=5.5, y=5.5, kind="down"),   # dist ~0.71 -> in range
+                     dict(x=8.0, y=5.0, kind="up")]     # dist 3.0  -> out of range (vision=2.0)
+    obs = env._obs()
+    assert obs[3] == 0.5 and obs[4] == 0.5              # only the near one is seen
+    assert np.all(obs[5:] == env.PAD_VALUE)             # the far one is padded away, not just deprioritised
 
 
 def test_room5_lanes_alternate_and_tile_the_field():
@@ -431,6 +444,40 @@ def test_room5_hard_lanes_move_faster():
     env._move_obstacles()
     assert env.obstacles[0]["y"] == 5.0 - env.speed                   # normal lane
     assert env.obstacles[1]["y"] == 5.0 + env.speed * env.HARD_MULT   # hard lane: 20% faster
+
+
+def test_room5_lane_bonus_paid_once_per_lane_per_episode():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    _, r, _ = env.step(E.RIGHT)                                     # 1.0 -> 1.2, still lane 0
+    assert r == env.STEP_REWARD + env.LANE_BONUS and env._best_lane == 0
+    _, r2, _ = env.step(E.UP)                                       # same lane again -> no bonus
+    assert r2 == env.STEP_REWARD
+    env.X = 1.9
+    _, r3, _ = env.step(E.RIGHT)                                    # 1.9 -> 2.1, enters lane 1
+    assert r3 == env.STEP_REWARD + env.LANE_BONUS and env._best_lane == 1
+    env.X = 1.0                                                     # retreat to lane 0...
+    env.step(E.UP)
+    _, r4, _ = env.step(E.RIGHT)                                    # ...and re-enter lane 0: no bonus
+    assert r4 == env.STEP_REWARD
+
+
+def test_room5_idle_penalty_when_action_is_blocked_by_a_boundary():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.X, env.Y = 1.0, 0.0                                         # X=1.0 is outside WALL_MARGIN
+    env._best_lane = env._lane_index(env.X)                         # neutralise the lane bonus
+    _, r, _ = env.step(E.DOWN)                                      # Y already 0 -> fully blocked
+    assert env.X == 1.0 and env.Y == 0.0                            # nothing moved
+    assert r == env.STEP_REWARD + env.IDLE_PENALTY                  # blocked, but not near the wall
+
+
+def test_room5_wall_penalty_near_the_left_edge():
+    env = E.Room5AsteroidField(spawn_prob=0.0, seed=0)
+    env.reset()
+    env.X, env.Y = 0.4, 5.0
+    _, r, _ = env.step(E.UP)                                        # moves, but still < WALL_MARGIN
+    assert env.X < env.WALL_MARGIN and r == env.STEP_REWARD + env.WALL_PENALTY
 
 
 def test_room5_random_room_reseeds_and_resets():

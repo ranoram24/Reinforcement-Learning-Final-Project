@@ -340,11 +340,16 @@ def render_legend(theme, meta):
         else:
             chips += [(T.get("goal", "🏁"), f"goal region · +{meta.get('goal_reward', 1000):g} (terminal)"),
                       (T.get("asteroid", "☄️"), "asteroid · grey glow = falling, blue glow = rising "
-                                               "· width 0.5 m · up to 4 per lane, single file"),
+                                               "· width 0.5 m · up to 2 per lane, single file"),
                       ("d/u · D/U", "lane letters: lower = normal lane, UPPER = hard lane (faster & denser)"),
                       ("💙", f"{meta.get('health_max', 3)} lives · hit (< 0.5 m) = "
-                             f"{meta.get('collision_reward', -50):g} + back to start"),
+                             f"{meta.get('collision_reward', -50):g} (asteroid destroyed, "
+                             f"Hezki stays put — no reset)"),
                       ("⏱️", f"0 lives / out of time · {meta.get('fail_reward', -300):g} (terminal)"),
+                      ("🏆", f"new furthest lane · +{meta.get('lane_bonus', 100):g} (once per lane/episode)"),
+                      ("🧱", f"blocked by a wall · {meta.get('idle_penalty', -5):g}/step"),
+                      ("⬅️", f"camping within {meta.get('wall_margin', 0.5):g} m of the left wall · "
+                            f"{meta.get('wall_penalty', -20):g}/step"),
                       ("👣", "each step · −1")]
     elif meta.get("kind") == "sokoban":                     # box-pushing room
         chips += [

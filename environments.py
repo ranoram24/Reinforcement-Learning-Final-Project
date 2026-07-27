@@ -1058,17 +1058,35 @@ class Room5AsteroidField:
     both their spawn rate and their asteroid speed are HARD_MULT times the
     base rate/speed, so the second half of the crossing is the harder one.
 
-    A hit (centre-to-centre distance < COLLIDE_DIST) costs one life, pays
-    COLLISION_REWARD, and teleports Hezki straight back to the start — the
-    episode CONTINUES (not terminal).  Losing the 3rd life, or exceeding
+    A hit (centre-to-centre distance < COLLIDE_DIST) costs one life and pays
+    COLLISION_REWARD — the asteroid that hit Hezki is destroyed (removed from
+    play), while Hezki himself stays exactly where he is (no reset/teleport);
+    the episode CONTINUES (not terminal).  Losing the 3rd life, or exceeding
     MAX_STEPS, ends the episode as a TERMINAL failure (FAIL_REWARD).  Reaching
     the goal region ends it as a TERMINAL success (GOAL_REWARD).  Every step
     costs STEP_REWARD, so a faster crossing scores higher.
 
-    Observation (fixed-size 1-D array, built for a DQN):
-      [X, Y, lives, (dx, dy) of the K_NEAREST closest asteroids — centre of
-      Hezki to centre of the asteroid, nearest-first, PAD_VALUE-padded when
-      fewer than K_NEAREST asteroids are on the board].
+    Exploration shaping (added because a plain −1 step cost lets a DQN learn
+    to just freeze near the start, which is safer than crossing):
+      • LANE_BONUS — the first time EACH lane is reached (a new furthest-lane
+        record for the episode), pay it once; retreating and re-entering an
+        already-reached lane pays nothing again.
+      • IDLE_PENALTY — a step whose action was fully blocked by a wall/board
+        edge (no actual movement happened).
+      • WALL_PENALTY — camping within WALL_MARGIN of the left wall (X≈0),
+        i.e. well behind the actual start column — discourages the
+        degenerate "never leave the wall" policy.
+
+    Observation — a circular radar (fixed-size 1-D array, built for a DQN):
+      [X, Y, lives, (dx, dy) of the K_NEAREST asteroids].  `vision` (a tunable
+      hyperparameter, sidebar slider) is the RADIUS of a detection circle
+      centred on Hezki: an asteroid's (dx, dy) — centre of Hezki to centre of
+      the asteroid — is only computed and placed in the state once that
+      asteroid enters the circle (Euclidean distance <= vision); asteroids
+      outside it are invisible, PAD_VALUE-padded, same as when fewer than
+      K_NEAREST exist at all.  Beyond its own dynamics (position, lives) the
+      agent never sees the full board — a deliberate partial-observation
+      sensor.
     """
 
     NAME = "Room 5 · The Asteroid Field Crossing"
@@ -1088,17 +1106,23 @@ class Room5AsteroidField:
     N_LANES = 8
     HALFWAY_X = 5.0                  # lanes with x_lo >= this are the HARD (right) half
     HARD_MULT = 1.2                  # spawn-rate & speed multiplier in hard lanes
-    MAX_PER_LANE = 4                 # at most this many asteroids alive in one lane at once
+    MAX_PER_LANE = 2                 # at most this many asteroids alive in one lane at once
+    WALL_MARGIN = 0.5                # X below this counts as "camping" at the left wall
 
     STEP_REWARD = -1.0
     COLLISION_REWARD = -50.0
     FAIL_REWARD = -300.0             # terminal: 0 lives left, or ran out of time
     GOAL_REWARD = 1000.0             # terminal: reached the goal region
+    LANE_BONUS = 100.0               # once per episode, the first time a NEW lane is reached
+    IDLE_PENALTY = -5.0              # per step the action was fully blocked (no actual movement)
+    WALL_PENALTY = -20.0             # per step spent camping within WALL_MARGIN of the left wall
 
-    def __init__(self, spawn_prob=0.12, speed=0.15, max_steps=500, seed=None, **_legacy):
+    def __init__(self, spawn_prob=0.12, speed=0.15, max_steps=500, vision=4.0,
+                 seed=None, **_legacy):
         self.spawn_prob = float(spawn_prob)   # P(a new asteroid spawns), per lane, per step
         self.speed = float(speed)             # metres/step an asteroid travels (base)
         self.max_steps = int(max_steps)
+        self.vision = float(vision)            # sensor radius (m); asteroids beyond it are unseen
         self.n_actions = 4                    # Up · Down · Left · Right
         self.actions = [UP, DOWN, LEFT, RIGHT]
         self.state_low = np.array([0.0, 0.0, 0.0] + [-10.0, -10.0] * self.K_NEAREST)
@@ -1127,10 +1151,12 @@ class Room5AsteroidField:
         self.t = 0
         self.hits = 0
         self._succeeded = False
+        self._best_lane = -1                  # furthest lane reached so far THIS episode
         return self._obs()
 
     def random_room(self, seed=None):
-        """Fresh episode with re-randomised traffic density & speed (post-training test)."""
+        """Fresh episode with re-randomised traffic density & speed (post-training test).
+        `vision` is kept as trained — it's an agent sensor spec, not a room property."""
         rng = np.random.default_rng(seed)
         self.spawn_prob = float(rng.uniform(0.06, 0.24))
         self.speed = float(rng.uniform(0.10, 0.28))
@@ -1166,9 +1192,15 @@ class Room5AsteroidField:
         self.obstacles = survivors
 
     def _nearest_k(self):
-        """(dx, dy) of the K_NEAREST closest asteroids, nearest first, centre
-        of Hezki to centre of the asteroid — PAD_VALUE-padded when short."""
-        ordered = sorted(self.obstacles,
+        """Circular radar: (dx, dy) of the K_NEAREST asteroids whose centre
+        lies within `vision` metres of Hezki's centre (a detection circle of
+        radius `vision`) — an asteroid outside that circle is not sensed at
+        all, exactly as if it weren't there.  Nearest first, PAD_VALUE-padded
+        when fewer than K_NEAREST are inside the circle."""
+        vis2 = self.vision ** 2                    # compare squared distances (cheaper, same order)
+        in_range = [o for o in self.obstacles      # only obstacles INSIDE the detection circle
+                   if (o["x"] - self.X) ** 2 + (o["y"] - self.Y) ** 2 <= vis2]
+        ordered = sorted(in_range,
                          key=lambda o: (o["x"] - self.X) ** 2 + (o["y"] - self.Y) ** 2)
         feats = []
         for o in ordered[:self.K_NEAREST]:
@@ -1183,25 +1215,46 @@ class Room5AsteroidField:
     def _in_goal(self):
         return self.X >= self.GOAL_X and self.GOAL_Y_LO <= self.Y <= self.GOAL_Y_HI
 
+    def _lane_index(self, x):
+        """-1 before the lanes (safe start column), 0..N_LANES-1 inside a lane,
+        N_LANES once past the last lane (in/near the goal column)."""
+        if x < self.lanes[0]["x_lo"]:
+            return -1
+        for i, lane in enumerate(self.lanes):
+            if lane["x_lo"] <= x < lane["x_hi"]:
+                return i
+        return self.N_LANES
+
     def step(self, a):
         dx, dy = _DELTA[a]
+        old_x, old_y = self.X, self.Y
         self.X = float(np.clip(self.X + dx * self.STEP_SIZE, 0.0, 10.0))
         self.Y = float(np.clip(self.Y + dy * self.STEP_SIZE, 0.0, 10.0))
         self.t += 1
         reward = self.STEP_REWARD
 
+        if self.X == old_x and self.Y == old_y:       # action fully blocked by a wall/boundary
+            reward += self.IDLE_PENALTY
+        if self.X < self.WALL_MARGIN:                  # camping near the left wall
+            reward += self.WALL_PENALTY
+
         if self._in_goal():                   # reached the goal → TERMINAL success (+1000)
             self._succeeded = True
             return self._obs(), reward + self.GOAL_REWARD, True
 
+        lane = self._lane_index(self.X)                # forward-progress bonus, once per lane
+        if lane > self._best_lane:
+            reward += self.LANE_BONUS
+            self._best_lane = lane
+
         self._move_obstacles()
         hit = next((o for o in self.obstacles if (o["x"] - self.X) ** 2
                     + (o["y"] - self.Y) ** 2 < self.COLLIDE_DIST ** 2), None)
-        if hit is not None:                   # collision → lose a life, back to start
+        if hit is not None:                   # collision → lose a life, stays put (no reset)
+            self.obstacles.remove(hit)         # the asteroid that hit Hezki is destroyed
             self.hits += 1
             self.lives -= 1
             reward += self.COLLISION_REWARD
-            self.X, self.Y = self.START
             if self.lives <= 0:                # 0 lives → TERMINAL failure (−300)
                 return self._obs(), reward + self.FAIL_REWARD, True
 
@@ -1224,7 +1277,10 @@ class Room5AsteroidField:
                     goal_y=(self.GOAL_Y_LO, self.GOAL_Y_HI), lanes=self.lanes,
                     halfway_x=self.HALFWAY_X, health_max=self.LIVES,
                     obs_width=self.OBS_WIDTH, goal_reward=self.GOAL_REWARD,
-                    collision_reward=self.COLLISION_REWARD, fail_reward=self.FAIL_REWARD)
+                    collision_reward=self.COLLISION_REWARD, fail_reward=self.FAIL_REWARD,
+                    lane_bonus=self.LANE_BONUS, idle_penalty=self.IDLE_PENALTY,
+                    wall_penalty=self.WALL_PENALTY, wall_margin=self.WALL_MARGIN,
+                    vision=self.vision)
 
 
 # --------------------------------------------------------------------------- #
