@@ -222,11 +222,11 @@ middle-right goal region, dodging two lanes of vertical asteroid traffic. There 
   (spawn probability, asteroid speed), plus a **“Generate Random Room & Test Policy”** button
   that re-randomises the traffic (keeping `vision` fixed as trained) and runs the learned policy
   on a field it never trained on.
-* **Good hyperparameters** `LR = 1e-3`, `γ = 0.98`, `batch = 64`, `ε₀ = 1.0`, `ε-decay K = 0.0015`,
-  `ε_min = 0.05`, `target update = 500 steps`, `hidden = 128`, `episodes ≈ 1500`, `vision = 4.0`,
-  `spawn prob = 0.12`, `speed = 0.15` → a rising, non-trivial success rate (this room is
-  deliberately the hardest of the five — dodging is genuinely harder than the earlier rooms'
-  known/tabular problems).
+* **Good hyperparameters** (the sidebar defaults) `LR = 0.0043`, `γ = 0.911`, `batch = 64`,
+  `ε₀ = 0.98`, `ε-decay K = 0.0038`, `ε_min = 0.07`, `target update = 150 steps`, `hidden = 256`,
+  `episodes = 1500`, `radar radius (vision) = 3.5`, `spawn prob = 0.08`, `speed = 0.15`,
+  `max steps = 670` → **60.1 % escape rate** (902/1500 training episodes reached the goal) —
+  this room is deliberately the hardest of the five, and by far the most hyperparameter-sensitive.
 
 ---
 

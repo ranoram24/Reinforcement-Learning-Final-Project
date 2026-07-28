@@ -230,33 +230,34 @@ def sidebar():
                            "road on a distance-to-finish reward route; wall −10/step; finish "
                            "+1000/total_time. Needs ≥~1,500 max-steps to reach the finish; ~1-2 min.")
     else:  # room5 — Deep Q-Network
+        # Defaults below are the best-found hyperparameters (60.1% escape rate).
         st.sidebar.markdown("**Deep Q-Network**")
-        p["alpha"] = st.sidebar.slider("learning rate (LR)", 0.0001, 0.0100, 0.0010, 0.0001,
+        p["alpha"] = st.sidebar.slider("learning rate (LR)", 0.0001, 0.0100, 0.0043, 0.0001,
                                        format="%.4f", key="a5")
-        p["gamma"] = st.sidebar.slider("γ  discount", 0.80, 0.999, 0.98, 0.001, key="g5")
+        p["gamma"] = st.sidebar.slider("γ  discount", 0.80, 0.999, 0.911, 0.001, key="g5")
         p["batch"] = st.sidebar.select_slider("batch size", [16, 32, 64, 128, 256], value=64, key="b5")
-        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key="e5")
+        p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 0.98, 0.01, key="e5")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (epsilon decay, linear ε=ε₀−K·t)",
-                                           0.0002, 0.0100, 0.0020, 0.0001, format="%.4f", key="ed5")
-        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.05, 0.01, key="em5")
+                                           0.0002, 0.0100, 0.0038, 0.0001, format="%.4f", key="ed5")
+        p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.5, 0.07, 0.01, key="em5")
         p["target_every"] = st.sidebar.slider("target-network update frequency (steps)",
-                                              50, 3000, 500, 50, key="tu5")
-        p["episodes"] = st.sidebar.number_input("episodes", 100, 20000, 1200, 50, key="ep5")
+                                              50, 3000, 150, 50, key="tu5")
+        p["episodes"] = st.sidebar.number_input("episodes", 100, 20000, 1500, 50, key="ep5")
         p["hidden"] = st.sidebar.select_slider("hidden units / layer", [32, 64, 128, 256],
-                                               value=128, key="h5")
+                                               value=256, key="h5")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"], p["epsilon_min"], p["episodes"]))
         st.sidebar.markdown("**Observation — circular radar**")
-        p["vision"] = st.sidebar.slider("📡 radar radius — detection circle (m)", 1.0, 10.0, 4.0,
+        p["vision"] = st.sidebar.slider("📡 radar radius — detection circle (m)", 1.0, 10.0, 3.5,
                                         0.5, key="v5")
         st.sidebar.caption("Beyond its own position & lives, Hezki senses the 4 nearest asteroids "
                            "only once they enter this detection circle (distance measured "
                            "centre-to-centre); farther ones are invisible — a partial-observation "
                            "sensor, not full board knowledge.")
         st.sidebar.markdown("**Asteroid field**")
-        p["spawn_prob"] = st.sidebar.slider("spawn probability / step / lane", 0.02, 0.40, 0.12,
+        p["spawn_prob"] = st.sidebar.slider("spawn probability / step / lane", 0.02, 0.40, 0.08,
                                             0.01, key="sp5")
         p["speed"] = st.sidebar.slider("asteroid speed (m / step)", 0.05, 0.40, 0.15, 0.01, key="sd5")
-        p["max_steps"] = st.sidebar.number_input("max steps / episode", 50, 2000, 500, 10, key="ms5")
+        p["max_steps"] = st.sidebar.number_input("max steps / episode", 50, 2000, 670, 10, key="ms5")
         st.sidebar.caption("🚀 Cross 8 alternating lanes left→right, Frogger-style — no shooting "
                            "(grey falls, blue rises, ≤2 asteroids/lane, single file; lanes past "
                            "X=5 are 20% faster & denser). 3 lives, a hit costs −50 (stays put, no "
