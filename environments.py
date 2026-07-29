@@ -332,11 +332,19 @@ class Room3DarkTemple:
         self.key_cell = next(c for c, ch in self.pickup_at.items() if ch == "K")
         self.key_bit = self.bit[self.key_cell]
         self.chaser_spawn = self.key_cell            # boulder wakes where the idol was
+        # "Treasure room" — the dense top-right G-cluster (x in [5,9], y in [8,9]),
+        # NOT the few scattered lone G's elsewhere, for the has-he-been-there metric.
+        self.treasure_mask = sum(1 << self.bit[c] for c, ch in self.pickup_at.items()
+                                 if ch == "G" and 5 <= c[0] <= 9 and 8 <= c[1] <= 9)
         self.reset()
 
     # ---- helpers ---------------------------------------------------------- #
     def has_key(self, mask):
         return bool((mask >> self.key_bit) & 1)
+
+    def treasure_visited(self):
+        """Has this episode collected at least one treasure ('G') pickup?"""
+        return bool(self._state[2] & self.treasure_mask)
 
     def in_bounds(self, c):
         return 0 <= c[0] < self.SIZE and 0 <= c[1] < self.SIZE
@@ -565,6 +573,8 @@ class Room2CloningLab:
         self.n_bonus = len(self.bonus_order)
         self.buttons = tuple(sorted(self.buttons))
         self.box_start = tuple(sorted(self.box_start))
+        # "Treasure room" — the bottom-left G-cluster, for the has-he-been-there metric.
+        self.treasure_mask = sum(1 << b for b in self.bonus_bit.values())
         self.reset()
 
     # ---- helpers ---------------------------------------------------------- #
@@ -573,6 +583,10 @@ class Room2CloningLab:
 
     def door_open(self, boxes):
         return all(b in boxes for b in self.buttons)
+
+    def treasure_visited(self):
+        """Has this episode collected at least one treasure-room bonus?"""
+        return bool(self._mask & self.treasure_mask)
 
     def _box_blocked(self, c, boxes):
         """Can a box occupy cell c?  (walls, borders, doors, exit, reset, boxes)"""
@@ -816,6 +830,7 @@ class Room4Garage:
         self.Vx = self.Vy = 0.0
         self.t = 0
         self._succeeded = False
+        self.wall_hits = 0
         return self._obs()
 
     def _obs(self):
@@ -830,6 +845,7 @@ class Room4Garage:
         if self._collides(nx, ny):                           # can't drive through walls
             self.Vx = self.Vy = 0.0                          # stopped by the barrier
             reward = self.COLLISION_PENALTY
+            self.wall_hits += 1
         else:
             self.X, self.Y = nx, ny
             self.Vx, self.Vy = float(vx), float(vy)

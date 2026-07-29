@@ -25,14 +25,14 @@ def test_slip_distribution_sums_to_one():
             continue
         for a in env.actions:
             assert abs(sum(p for p, _ in env.outcomes(s, a)) - 1.0) < 1e-9
-    # Room 2 has no DP model (SARSA is model-free) — sweep its cells directly
-    r2 = E.Room2DarkTemple()
-    for x in range(r2.SIZE):
-        for y in range(r2.SIZE):
-            if (x, y) in r2.walls:
+    # Room 3 has no DP model (Q-Learning is model-free) — sweep its cells directly
+    r3 = E.Room3DarkTemple()
+    for x in range(r3.SIZE):
+        for y in range(r3.SIZE):
+            if (x, y) in r3.walls:
                 continue
-            for a in r2.actions:
-                assert abs(sum(p for p, _ in r2.outcomes((x, y, 0, None), a)) - 1.0) < 1e-9
+            for a in r3.actions:
+                assert abs(sum(p for p, _ in r3.outcomes((x, y, 0, None), a)) - 1.0) < 1e-9
 
 
 def test_slip_applies_only_to_the_named_action():
@@ -62,8 +62,8 @@ def test_terminals_absorbing_and_rewarded():
     assert all((s[0], s[1]) != r1.exit for s in r1.build_model())
 
 
-def test_room2_pits_reset_to_start_without_ending_episode():
-    env = E.Room2DarkTemple(seed=0)
+def test_room3_pits_reset_to_start_without_ending_episode():
+    env = E.Room3DarkTemple(seed=0)
     pit, cost = next(iter(env.holes.items()))
     nb = next(n for n in [(pit[0], pit[1] + 1), (pit[0], pit[1] - 1),
                           (pit[0] + 1, pit[1]), (pit[0] - 1, pit[1])]
@@ -76,8 +76,8 @@ def test_room2_pits_reset_to_start_without_ending_episode():
     assert r == cost and not done                # penalty, but episode continues
 
 
-def test_room2_gate_needs_the_idol_and_exit_is_terminal():
-    env = E.Room2DarkTemple()
+def test_room3_gate_needs_the_idol_and_exit_is_terminal():
+    env = E.Room3DarkTemple()
     door = next(iter(env.doors))
     nb = (door[0] + 1, door[1])                  # step left into the gate
     assert env._move((nb[0], nb[1], 0), E.LEFT) == nb                    # shut
@@ -87,8 +87,8 @@ def test_room2_gate_needs_the_idol_and_exit_is_terminal():
     assert (s[0], s[1]) == env.exit and done and r == env.EXIT_REWARD
 
 
-def test_room2_plate_pays_once_then_is_consumed_and_wakes_boulder():
-    env = E.Room2DarkTemple(seed=0)
+def test_room3_plate_pays_once_then_is_consumed_and_wakes_boulder():
+    env = E.Room3DarkTemple(seed=0)
     right = (env.button[0] + 1, env.button[1])          # free cell east of the plate
     key = 1 << env.key_bit
     # without the idol the plate is inert
@@ -107,11 +107,11 @@ def test_room2_plate_pays_once_then_is_consumed_and_wakes_boulder():
     assert r2 == 0.0
 
 
-def test_room2_boulder_catch_penalises_but_leaves_agent_in_place():
+def test_room3_boulder_catch_penalises_but_leaves_agent_in_place():
     """Being caught costs CATCH_REWARD and the boulder vanishes, but the agent
     STAYS where it is (no teleport) and keeps everything — it just heads on to
     the exit."""
-    env = E.Room2DarkTemple(seed=0)
+    env = E.Room3DarkTemple(seed=0)
     right = (env.button[0] + 1, env.button[1])
     key = 1 << env.key_bit
     env.reset(); env._state = (right[0], right[1], key, None)
@@ -196,16 +196,11 @@ def test_action_masking_matches_the_legal_moves_in_every_grid_room():
         nxt = (s[0] + E._DELTA[a][0], s[1] + E._DELTA[a][1])
         if not env.in_bounds(nxt):
             return False
-        if isinstance(env, E.Room3CloningLab):
-            return not env.is_wall(nxt)
         return not env.blocked(nxt, s[2])
 
-    for env in (E.Room1FrozenArchive(), E.Room2DarkTemple(), E.Room3CloningLab()):
-        if isinstance(env, E.Room3CloningLab):
-            states = [s for s in env.states() if not env.is_terminal(s)]
-        else:
-            states = [(x, y, m) for x in range(env.SIZE) for y in range(env.SIZE)
-                      if (x, y) not in env.walls for m in (0, 1)]
+    for env in (E.Room1FrozenArchive(), E.Room3DarkTemple()):
+        states = [(x, y, m) for x in range(env.SIZE) for y in range(env.SIZE)
+                  if (x, y) not in env.walls for m in (0, 1)]
         for s in states:
             legal = [a for a in env.actions if legal_dest(env, s, a)]
             va = env.valid_actions(s)
@@ -217,7 +212,7 @@ def test_action_masking_matches_the_legal_moves_in_every_grid_room():
 
 def test_linear_epsilon_decay():
     """ε must fall LINEARLY by K each episode (ε = ε₀ − K·t), floored at ε_min."""
-    env = E.Room3CloningLab(seed=0)
+    env = E.Room3DarkTemple(seed=0)
     ag = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.01,
                      epsilon_min=0.1, episodes=200, max_steps=50, seed=0)
     eps = ag.train(snapshots=1)["epsilons"]
@@ -254,33 +249,13 @@ def test_qlearning_solves_the_boulder_temple():
     """Room 3 (Dark Temple) uses off-policy Q-Learning + a decaying-from-high ε.
     That combination reliably solves the sparse, high-reward maze (SARSA does
     not)."""
-    env = E.Room2DarkTemple(seed=0)
-    res = A.QLearning(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.0002,
-                      epsilon_min=0.01, episodes=4000, max_steps=400,
+    env = E.Room3DarkTemple(seed=0)
+    res = A.QLearning(env, alpha=0.1, gamma=0.696, epsilon=1.0, epsilon_k=0.0002,
+                      epsilon_min=0.01, episodes=6000, max_steps=400,
                       optimistic_init=0.0, seed=0).train(snapshots=3)
-    wins = sum(A.rollout(E.Room2DarkTemple(seed=s), res["final_policy"],
+    wins = sum(A.rollout(E.Room3DarkTemple(seed=s), res["final_policy"],
                          max_steps=400)["success"] for s in range(15))
     assert wins >= 13
-
-
-def test_cliff_resets_not_terminal_and_sarsa_finds_a_safe_path():
-    """Room 2 (Cloning Lab / Cliff Walking) uses on-policy SARSA, which learns a
-    cautious path that reaches the exit without stepping on the cliff."""
-    env = E.Room3CloningLab()
-    env.reset()
-    env._state = (1, 1)
-    s2, r, done = env.step(E.DOWN)                         # (1,1) -> (1,0) is cliff
-    assert s2 == env.start and r == E.TRAP_REWARD and not done
-    env._state = (9, 1)
-    s2, r, done = env.step(E.DOWN)                         # (9,1) -> (9,0) is the exit
-    assert s2 == env.goal and r == E.GOAL_REWARD and done
-    # SARSA learns a safe greedy path to the goal
-    res = A.Sarsa(env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_k=0.001,
-                  epsilon_min=0.01, episodes=1500, max_steps=200, seed=0).train(snapshots=2)
-    roll = A.rollout(env, res["final_policy"], max_steps=100)
-    assert roll["success"]
-    path = {f["agent"] for f in roll["frames"]}
-    assert path.isdisjoint(env.cliff)                      # never steps on the cliff
 
 
 # --------------------------------------------------------------------------- #

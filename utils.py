@@ -341,7 +341,7 @@ def render_legend(theme, meta):
             chips += [(T.get("goal", "🏁"), f"goal region · +{meta.get('goal_reward', 1000):g} (terminal)"),
                       (T.get("asteroid", "☄️"), "asteroid · grey glow = falling, blue glow = rising "
                                                "· width 0.5 m · up to 2 per lane, single file"),
-                      ("d/u · D/U", "lane letters: lower = normal lane, UPPER = hard lane (faster & denser)"),
+                      ("🌓", "darker-shaded lane = hard (past the midline — faster & denser)"),
                       ("💙", f"{meta.get('health_max', 3)} lives · hit (< 0.5 m) = "
                              f"{meta.get('collision_reward', -50):g} (asteroid destroyed, "
                              f"Hezki stays put — no reset)"),
@@ -409,8 +409,9 @@ def render_legend(theme, meta):
         "background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.25);"
         f"border-radius:999px;padding:4px 11px;margin:3px;font-size:13px'>"
         f"<span style='font-size:16px'>{e}</span>{t}</span>" for e, t in chips)
-    return (f"<div style='font-family:system-ui,Segoe UI,sans-serif;color:#cbd5e1;"
-            f"text-align:center;padding:2px'>{inner}</div>")
+    return (f"<style>html,body{{margin:0;padding:0;overflow:hidden}}</style>"
+            f"<div style='font-family:system-ui,Segoe UI,sans-serif;color:#cbd5e1;"
+            f"text-align:center;padding:2px;box-sizing:border-box'>{inner}</div>")
 
 
 # ========================================================================== #
@@ -533,15 +534,6 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
             opacity = ".40" if lane["hard"] else ".22"          # hard lanes read visibly denser
             p.append(f"<rect x='{px(lo):.1f}' y='{pad:.1f}' width='{(hi-lo)*scale:.1f}' "
                      f"height='{span*scale:.1f}' fill='{base_c}' opacity='{opacity}'/>")
-            letter = ("D" if down else "U") if lane["hard"] else ("d" if down else "u")
-            txt_c = "#cbd5e1" if down else "#bfdbfe"
-            p.append(f"<text x='{px((lo+hi)/2):.1f}' y='{pad+16:.1f}' font-size='13' "
-                     f"font-weight='700' fill='{txt_c}' text-anchor='middle'>{letter}</text>")
-        hx = meta.get("halfway_x")
-        if hx is not None:                                     # dashed line: hard lanes start here
-            p.append(f"<line x1='{px(hx):.1f}' y1='{pad:.1f}' x2='{px(hx):.1f}' "
-                     f"y2='{pad+span*scale:.1f}' stroke='{T['accent']}' stroke-width='1.5' "
-                     f"stroke-dasharray='4 4' opacity='.5'/>")
         gx = meta.get("goal_x", 9.0)                            # goal region (pink) — whole lane
         gylo, gyhi = meta.get("goal_y", (0.0, 10.0))
         goal_c = T.get("goal_c", "#ec4899")
@@ -554,6 +546,8 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
         mx = safe_x / 2.0                                       # safe column, never over a lane
         p.append(f"<circle cx='{px(mx):.1f}' cy='{py(sy):.1f}' r='{0.24*scale:.0f}' fill='none' "
                  f"stroke='{T['accent']}' stroke-width='2' stroke-dasharray='3 3' opacity='.6'/>")
+        if agent is None:                 # static preview: sit the ship in its start marker
+            agent = (mx, sy)              # so it's clear this IS where it starts
         if vision and agent is not None:                        # radar detection circle
             ax, ay = agent
             p.append(f"<circle cx='{px(ax):.1f}' cy='{py(ay):.1f}' r='{vision*scale:.1f}' "
@@ -766,6 +760,27 @@ def length_curve(lengths, window=50, title="Episode length", ylab="Steps"):
                     mode="lines", line=dict(color=C_MAIN, width=2.5),
                     name=f"{window}-ep moving avg")
     return _layout(fig, title, "Episode", ylab)
+
+
+def steps_by_outcome_bar(lengths, successes, title="Steps per episode — by outcome"):
+    """Bar chart of steps per episode, coloured green (reached the goal) / red
+    (failed) — so a training run's step count can be read against WHETHER it
+    actually succeeded, not just as an undifferentiated average."""
+    lengths = np.asarray(lengths)
+    successes = np.asarray(successes, dtype=bool)
+    colors = np.where(successes, C_GOOD, C_BAD)
+    fig = go.Figure(go.Bar(x=np.arange(len(lengths)), y=lengths,
+                           marker=dict(color=colors, line_width=0),
+                           showlegend=False,
+                           hovertemplate="episode %{x}<br>steps %{y}<extra></extra>"))
+    # dummy scatter traces just to put colour swatches in the legend
+    fig.add_scatter(x=[None], y=[None], mode="markers",
+                    marker=dict(color=C_GOOD, size=10, symbol="square"),
+                    name="reached the goal")
+    fig.add_scatter(x=[None], y=[None], mode="markers",
+                    marker=dict(color=C_BAD, size=10, symbol="square"),
+                    name="failed")
+    return _layout(fig, title, "Episode", "Steps")
 
 
 def value_heatmap(V, meta, mask=0):

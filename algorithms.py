@@ -189,7 +189,8 @@ class Sarsa(TDAgent):
     """On-policy TD(0): update towards the action actually taken next."""
 
     def train(self, snapshots=6, progress=None, record=40):
-        rewards, eps_hist, lengths, snaps, tapes, succ = [], [], [], [], [], []
+        rewards, eps_hist, lengths, snaps, tapes, succ, treasure = [], [], [], [], [], [], []
+        has_treasure = hasattr(self.env, "treasure_visited")
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -215,6 +216,8 @@ class Sarsa(TDAgent):
             eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
             succ.append(bool(self.env.is_success()))       # did this episode escape?
+            if has_treasure:
+                treasure.append(bool(self.env.treasure_visited()))
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -226,14 +229,16 @@ class Sarsa(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
+                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ,
+                    treasure_visits=treasure)
 
 
 class QLearning(TDAgent):
     """Off-policy TD(0): update towards the greedy next action (max)."""
 
     def train(self, snapshots=6, progress=None, record=40):
-        rewards, eps_hist, lengths, snaps, tapes, succ = [], [], [], [], [], []
+        rewards, eps_hist, lengths, snaps, tapes, succ, treasure = [], [], [], [], [], [], []
+        has_treasure = hasattr(self.env, "treasure_visited")
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -259,6 +264,8 @@ class QLearning(TDAgent):
             eps = self.decay(eps)
             rewards.append(total); eps_hist.append(eps); lengths.append(steps)
             succ.append(bool(self.env.is_success()))       # did this episode escape?
+            if has_treasure:
+                treasure.append(bool(self.env.treasure_visited()))
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -270,7 +277,8 @@ class QLearning(TDAgent):
         final = self._snapshot()
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, epsilons=eps_hist, lengths=lengths,
-                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
+                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ,
+                    treasure_visits=treasure)
 
 
 # --------------------------------------------------------------------------- #
@@ -331,7 +339,8 @@ class LinearFAAgent:
         return self.w[:, feats].sum(axis=1)
 
     def train(self, snapshots=6, progress=None, record=25):
-        rewards, lengths, snaps, tapes, successes = [], [], [], [], []
+        rewards, lengths, snaps, tapes, successes, wall_hits = [], [], [], [], [], []
+        has_wall_hits = hasattr(self.env, "wall_hits")
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         eps = self.eps0
@@ -359,6 +368,8 @@ class LinearFAAgent:
             eps = max(self.eps_min, eps - self.eps_k)          # ε = ε₀ − K·t
             rewards.append(total); lengths.append(steps)
             successes.append(bool(self.env.is_success()))      # reached the finish?
+            if has_wall_hits:
+                wall_hits.append(int(self.env.wall_hits))
             if taping:
                 tapes.append(dict(episode=ep, reward=total, steps=steps,
                                   success=self.env.is_success(), frames=frames,
@@ -371,7 +382,7 @@ class LinearFAAgent:
         snaps.append((self.episodes, final))
         return dict(rewards=rewards, lengths=lengths, epsilons=None,
                     snapshots=snaps, final_policy=final, tapes=tapes,
-                    successes=successes)
+                    successes=successes, wall_hits=wall_hits)
 
 
 # --------------------------------------------------------------------------- #

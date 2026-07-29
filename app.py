@@ -434,7 +434,7 @@ def replay_eval(key, entry, tag, policy):
     return cache[ck]
 
 
-LEGEND_H = 92
+LEGEND_H = 170   # generous enough for the longest legend (Room 5, ~9 chips) without scrolling
 
 
 # --------------------------------------------------------------------------- #
@@ -475,15 +475,18 @@ def tab_simulation(key, entry):
             st.caption("Arrows are the learned greedy policy · every special tile shows its reward.")
             embed(board_html(key, meta, agent=meta["start"], policy=pol, fill=True),
                   height=board_h)
-    else:
+    elif key == "room5":
+        # Always the static room preview (layout + start position + rewards via the
+        # legend below) — never a rollout snapshot, so this view doesn't change once
+        # training finishes. The live trained policy is in the Episode Replay tab.
+        embed(board_html(key, meta, agent=None, vision=entry["params"].get("vision"),
+                         fill=True), height=board_h)
+    else:  # room4
         roll = eval_roll(key, entry, entry["final_policy"], seed=1)
         last = roll["frames"][-1]
-        embed(board_html(key, meta, agent=last["agent"], obstacles=last.get("obstacles"),
-                         vision=entry["params"].get("vision") if key == "room5" else None,
-                         trail=[f["agent"] for f in roll["frames"]] if key == "room4" else None,
+        embed(board_html(key, meta, agent=last["agent"],
+                         trail=[f["agent"] for f in roll["frames"]],
                          fill=True), height=board_h)
-        ok = "✅ escaped" if roll["success"] else "❌ did not finish"
-        st.metric("Greedy evaluation", f"{ok} · {roll['steps']} steps · return {roll['reward']:.1f}")
     embed(legend_html(key, meta), height=LEGEND_H)
 
 
@@ -505,13 +508,18 @@ def tab_charts(key, entry):
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))
         if n:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("🏆 Episodes escaped", f"{total:,}")
-            m2.metric("❌ Episodes not escaped", f"{n - total:,}")
-            m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
+            treas = res.get("treasure_visits", [])
+            cols = st.columns(4) if treas else st.columns(3)
+            cols[0].metric("🏆 Episodes escaped", f"{total:,}")
+            cols[1].metric("❌ Episodes not escaped", f"{n - total:,}")
+            cols[2].metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
+            if treas:
+                cols[3].metric("💎 Episodes that visited the treasure room",
+                               f"{sum(treas):,}  ({100 * sum(treas) / n:.1f}%)")
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"]), use_container_width=True)
         c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
+        st.plotly_chart(U.steps_by_outcome_bar(res["lengths"], succ), use_container_width=True)
     elif key == "room4":
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))
@@ -520,10 +528,20 @@ def tab_charts(key, entry):
             m1.metric("🏆 Episodes escaped", f"{total:,}")
             m2.metric("❌ Episodes not escaped", f"{n - total:,}")
             m3.metric("🎯 Escape rate", f"{100 * total / n:.1f}%")
+        hits = res.get("wall_hits", [])
+        if hits and n:
+            ok_hits = [h for h, s in zip(hits, succ) if s]
+            bad_hits = [h for h, s in zip(hits, succ) if not s]
+            h1, h2 = st.columns(2)
+            h1.metric("🧱 Avg wall crashes — successful episodes",
+                     f"{(sum(ok_hits) / len(ok_hits)):.1f}" if ok_hits else "n/a")
+            h2.metric("🧱 Avg wall crashes — unsuccessful episodes",
+                     f"{(sum(bad_hits) / len(bad_hits)):.1f}" if bad_hits else "n/a")
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"], window=50), use_container_width=True)
         c2.plotly_chart(U.length_curve(res["lengths"], window=50,
                         title="Episode duration (moving avg)"), use_container_width=True)
+        st.plotly_chart(U.steps_by_outcome_bar(res["lengths"], succ), use_container_width=True)
     else:  # room5 — DQN
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))
@@ -537,6 +555,7 @@ def tab_charts(key, entry):
         c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
         st.plotly_chart(U.length_curve(res["lengths"], window=50,
                         title="Episode duration (moving avg)"), use_container_width=True)
+        st.plotly_chart(U.steps_by_outcome_bar(res["lengths"], succ), use_container_width=True)
 
 
 def discounted_return(step_rewards, gamma):
@@ -713,8 +732,21 @@ def tab_replay(key, entry, random_clicked):
         return
     r = ROOMS[key]
     is_grid = r["kind"] in ("dp", "grid")
-    embed(legend_html(key, entry["meta"]), height=LEGEND_H)
     board_h = (GRID_H if is_grid else SPACE_H) + 130
+
+    if key == "room1":
+        # Value Iteration has no training episodes to pick from — just play the
+        # single deterministic evaluation rollout of the optimal policy.
+        roll = eval_roll(key, entry, entry["final_policy"], seed=1)
+        st.caption("Dynamic Programming has no training episodes to browse — this plays the "
+                   f"**evaluation rollout** of the optimal policy once: {roll['steps']} steps, "
+                   f"{'escaped ✅' if roll['success'] else 'did not escape ❌'}, "
+                   f"return {roll['reward']:.0f}.")
+        ep = dict(episode=0, frames=roll["frames"], actions=roll.get("actions"),
+                 step_rewards=roll.get("step_rewards"), success=roll["success"])
+        embed(grid_player(key, entry, ep, token=f"{key}-eval"), height=board_h)
+        embed(legend_html(key, entry["meta"]), height=LEGEND_H)
+        return
 
     eps = episode_list(key, entry)
     if not eps:
@@ -758,6 +790,7 @@ def tab_replay(key, entry, random_clicked):
     else:
         embed(U.render_player(render_frames(key, entry, ep), delay_ms=110,
                               caption=f"episode #{ep['episode']}"), height=board_h)
+    embed(legend_html(key, entry["meta"]), height=LEGEND_H)
 
 
 PRETTY = {"alpha": "α / LR", "gamma": "γ", "epsilon": "ε₀", "epsilon_k": "ε decrement K",
@@ -856,7 +889,8 @@ def main():
                    "still reflects the **previous** run — click **🚀 Train** to apply the new "
                    "settings.", icon="⚠️")
 
-    labels = ["🎬 Room Simulation (HTML)", "📈 Training Metrics", "⏪ Episode Replay"]
+    labels = ["🎬 Room Simulation (HTML)", "📈 Training Metrics",
+              "⏪ Policy Replay" if key == "room1" else "⏪ Episode Replay"]
     if key == "room5":
         labels.append("🎲 Policy Test")
     tabs = st.tabs(labels)
