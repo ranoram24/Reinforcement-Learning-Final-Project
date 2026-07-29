@@ -37,7 +37,7 @@ THEMES = {
         door_c="#5b3a1a", key_c="#8a7a10", bonus_c="#14532d", hazard_c="#7f1d1d",
         slip_a="#0e4a63", slip_b="#1a6f8c",
         agent="🐕", wall="🧊", slip="❄️", slip_name="ice", pit="🕳️", cliff="🕶️",
-        goal="🌄", start="🐾", door="🧱", key="🔑", bonus="🌰", hazard="🐯"),
+        goal="🌄", start="🐾", door="🐿️", key="🌰", bonus="🐘", hazard="🐯"),
     "temple": dict(  # Raiders of the Lost Ark
         movie="Raiders of the Lost Ark", board="radial-gradient(circle at 50% 0%, #3a2a17, #160f08 72%)",
         frame="#b45309", accent="#f59e0b",
@@ -63,11 +63,11 @@ THEMES = {
     "garage": dict(  # The Fast and the Furious — Tokyo Drift
         movie="Tokyo Drift", board="#04040a", grid="#1e1533",
         accent="#ec4899", neon2="#22d3ee",
-        road="#eef2f7", road_edge="#ec4899", centerline="#fbbf24",
+        road="#d1d5db", road_edge="#ec4899", centerline="#fbbf24",
         car="🏎️", agent="🏎️", exit="🏁", start="🟣", finish="🏁"),
     "space": dict(  # Star Wars — Asteroid Field Crossing
         movie="Star Wars", board="#02030a", grid="#0b1030",
-        accent="#eab308", agent="🚀", goal="🏁", asteroid="☄️",
+        accent="#eab308", agent="🚀", goal="🌑", asteroid="☄️",
         down_c="#9ca3af", up_c="#3b82f6",               # direction glow: grey (falling) / blue (rising)
         zone_down_c="#334155", zone_up_c="#1e3a8a", goal_c="#ec4899"),
 }
@@ -333,21 +333,22 @@ def render_legend(theme, meta):
     chips = [(T["agent"], "Hezki")]
     if theme in ("garage", "space"):
         if theme == "garage":
-            chips += [("⬜", "the road — drive on the white"),
+            chips += [("⬜", "the road — drive on the light gray"),
                       (T["start"], "start"),
                       (T["exit"], "finish · +1000 / total time"),
                       ("⬛", f"wall · {meta.get('collision_penalty', -500):g} / step touching it")]
         else:
-            chips += [(T.get("goal", "🏁"), f"goal region · +{meta.get('goal_reward', 1000):g} (terminal)"),
+            chips += [(T.get("goal", "🌑"), f"goal region · +{meta.get('goal_reward', 1000):g} (terminal)"),
                       (T.get("asteroid", "☄️"), "asteroid · grey glow = falling, blue glow = rising "
                                                "· width 0.5 m · up to 2 per lane, single file"),
-                      ("🌓", "darker-shaded lane = hard (past the midline — faster & denser)"),
+                      ("🌓", "darker-shaded lane = easy; lighter-shaded lane = hard "
+                            "(past the midline — faster & denser)"),
                       ("💙", f"{meta.get('health_max', 3)} lives · hit (< 0.5 m) = "
                              f"{meta.get('collision_reward', -50):g} (asteroid destroyed, "
                              f"Hezki stays put — no reset)"),
                       ("⏱️", f"0 lives / out of time · {meta.get('fail_reward', -300):g} (terminal)"),
                       ("🏆", f"new furthest lane · +{meta.get('lane_bonus', 100):g} (once per lane/episode)"),
-                      ("🧱", f"blocked by a wall · {meta.get('idle_penalty', -5):g}/step"),
+                      ("🧱", f"touched a wall · {meta.get('idle_penalty', -5):g}/step"),
                       ("⬅️", f"camping within {meta.get('wall_margin', 0.5):g} m of the left wall · "
                             f"{meta.get('wall_penalty', -20):g}/step"),
                       ("👣", "each step · −1")]
@@ -541,7 +542,7 @@ def render_space_svg(meta, theme, agent=None, obstacles=None, vision=None,
                  f"height='{(gyhi-gylo)*scale:.1f}' fill='{goal_c}' "
                  f"opacity='.30' stroke='{goal_c}' stroke-width='2'/>")
         p.append(f"<text x='{px((gx+span)/2):.1f}' y='{py((gylo+gyhi)/2)+8:.1f}' font-size='22' "
-                 f"text-anchor='middle'>{T.get('goal','🏁')}</text>")
+                 f"text-anchor='middle'>{T.get('goal','🌑')}</text>")
         _, sy = meta.get("start", (1.0, 5.0))                   # start marker — centred in the
         mx = safe_x / 2.0                                       # safe column, never over a lane
         p.append(f"<circle cx='{px(mx):.1f}' cy='{py(sy):.1f}' r='{0.24*scale:.0f}' fill='none' "
