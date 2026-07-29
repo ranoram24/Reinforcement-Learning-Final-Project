@@ -188,7 +188,8 @@ def sidebar():
         # Room 2 = Cloning-Lab Sokoban + SARSA ; Room 3 = Dark Temple boulder + Q-Learning.
         boulder = (key == "room3")
         p["alpha"] = st.sidebar.slider("α  learning rate", 0.01, 1.0, 0.10, 0.01, key=f"a{key}")
-        p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.99, 0.001, key=f"g{key}")
+        p["gamma"] = st.sidebar.slider("γ  discount", 0.50, 0.999, 0.696 if boulder else 0.99,
+                                       0.001, key=f"g{key}")
         p["epsilon"] = st.sidebar.slider("ε₀  initial exploration", 0.10, 1.0, 1.0, 0.01, key=f"e{key}")
         p["epsilon_k"] = st.sidebar.slider("K  ε decrement / episode (linear ε=ε₀−K·t)",
                                            0.0, 0.05, 0.0002 if boulder else 0.0003, 0.0001,
@@ -196,16 +197,16 @@ def sidebar():
         p["epsilon_min"] = st.sidebar.slider("ε minimum", 0.0, 0.50, 0.01, 0.01, key=f"em{key}")
         p["optimistic_init"] = st.sidebar.slider("optimistic init Q₀", 0.0, 3000.0,
                                                  0.0, 50.0, key=f"oi{key}")
-        p["episodes"] = st.sidebar.number_input("episodes", 100, 40000,
-                                                4000 if boulder else 6000, 100, key=f"ep{key}")
+        p["episodes"] = st.sidebar.number_input("episodes", 100, 40000, 6000, 100, key=f"ep{key}")
         p["max_steps"] = st.sidebar.number_input("max steps / episode", 0, 2000,
                                                  400 if boulder else 500, 1, key=f"ms{key}")
         st.sidebar.caption(eps_note(p["epsilon"], p["epsilon_k"],
                                     p["epsilon_min"], p["episodes"]))
         if boulder:
             st.sidebar.caption("Off-policy Q-Learning + a decaying ε solves this. Step reward 0; "
-                               "idol +100000 opens the gate, plate +10000 (once, wakes the "
-                               "boulder), catch −100000 (kept everything), exit +200000.")
+                               "idol +1000 opens the gate, treasure +100 (one-off), pits −50/−100 "
+                               "(reset to start), plate +1000 (once, wakes the boulder), "
+                               "catch −1000 (kept everything), exit +2000.")
         else:
             st.sidebar.caption("On-policy SARSA. Push both 📦 onto the plates 🔘 (+5000 each) "
                                "to open the gate, then reach the exit (+10000). Step −1; "
@@ -293,7 +294,7 @@ def build_env(key, p, seed=None):
     if key == "room2":                       # Room 2 = Cloning Lab (Sokoban, SARSA)
         return E.Room2CloningLab(seed=seed)
     if key == "room3":                       # Room 3 = Dark Temple boulder (Q-Learning)
-        return E.Room2DarkTemple(seed=seed)
+        return E.Room3DarkTemple(seed=seed)
     if key == "room4":
         return E.Room4Garage(max_steps=p["max_steps"], shaping=p["shaping"],
                              shaping_coef=p["shaping_coef"])
@@ -511,10 +512,6 @@ def tab_charts(key, entry):
         c1, c2 = st.columns(2)
         c1.plotly_chart(U.reward_curve(res["rewards"]), use_container_width=True)
         c2.plotly_chart(U.epsilon_curve(res["epsilons"]), use_container_width=True)
-        if key == "room2" and entry["meta"].get("cliff"):   # cliff room → learned-path plot
-            roll = eval_roll(key, entry, entry["final_policy"], seed=1)
-            path = [f["agent"] for f in roll["frames"]]
-            st.plotly_chart(U.path_compare(entry["meta"], path), use_container_width=True)
     elif key == "room4":
         succ = res.get("successes", [])
         n, total = len(succ), int(sum(succ))

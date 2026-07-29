@@ -789,19 +789,3 @@ def value_heatmap(V, meta, mask=0):
     return _layout(fig, "Learned state-value V(s)  (❄️ optimal cost-to-go)", "x", "y")
 
 
-def path_compare(meta, path):
-    size = meta["size"]
-    fig = go.Figure()
-    cx = [x for (x, y) in meta["cliff"]]
-    cy = [y for (x, y) in meta["cliff"]]
-    fig.add_scatter(x=cx, y=cy, mode="markers",
-                    marker=dict(symbol="square", size=18, color=C_BAD), name="cliff (clones)")
-    fig.add_scatter(x=[meta["start"][0]], y=[meta["start"][1]], mode="markers",
-                    marker=dict(size=14, color=C_GOOD), name="start")
-    fig.add_scatter(x=[meta["goal"][0]], y=[meta["goal"][1]], mode="markers",
-                    marker=dict(size=14, color=C_ACCENT, symbol="star"), name="exit")
-    fig.add_scatter(x=[p[0] for p in path], y=[p[1] for p in path], mode="lines+markers",
-                    line=dict(color=C_MAIN, width=3), name="learned path")
-    fig.update_xaxes(range=[-0.5, size - 0.5], dtick=1)
-    fig.update_yaxes(range=[-0.5, size - 0.5], dtick=1)
-    return _layout(fig, "SARSA greedy path — the safe route around the cliff", "x", "y")

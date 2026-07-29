@@ -8,9 +8,9 @@ different RL problem solved by a different algorithm.
 | # | Room | Movie | Model | Algorithm | RL concept |
 |---|------|-------|-------|-----------|------------|
 | 1 | ❄️ Frozen Archive | *Ice Age* | **known** | **Value Iteration** | Dynamic Programming, slippery (stochastic) transitions |
-| 2 | 🏛️ Dark Temple | *Raiders of the Lost Ark* | unknown | **SARSA** | on-policy TD control, ε-greedy |
-| 3 | 🕶️ Cloning Lab | *The Matrix* | unknown | **Q-Learning** | off-policy TD control (Cliff Walking) |
-| 4 | 🏎️ Hovercar Garage | *The Fast and the Furious* | unknown | **Tile-coding linear FA** | function approximation over a continuous 4-D state |
+| 2 | 🕶️ Cloning Lab | *The Matrix* | unknown | **SARSA** | on-policy TD control, ε-greedy (Sokoban box-pushing puzzle) |
+| 3 | 🏛️ Dark Temple | *Raiders of the Lost Ark* | unknown | **Q-Learning** | off-policy TD control, ε-greedy (idol-and-boulder chase) |
+| 4 | 🏎️ Tokyo Drift Canyon | *The Fast and the Furious* | unknown | **Tile-coding linear FA** | function approximation over a continuous 4-D state |
 | 5 | 🚀 Asteroid Field | *Star Wars* | unknown | **Deep Q-Network (DQN)** | neural function approximation over a continuous state, dynamic obstacles |
 
 Every room lets you tune **all** algorithm hyperparameters in the sidebar, watch **live
@@ -55,7 +55,8 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 > **Coordinate convention (grid rooms):** state `(x, y)`, `x` = column, `y` = row, both in
 > `0..9`. `Right`=x+1, `Left`=x−1, `Up`=y+1, `Down`=y−1. The board is drawn with `y=0` at the
 > bottom. **Terminal states are absorbing** everywhere (the episode ends on entry — no further
-> sliding), the single exception being the Room-3 cliff (see below).
+> sliding), the single exception being Room 3's spike pits (see below), which penalise and
+> reset the agent to the start but let the episode continue.
 >
 > **Slip model (Rooms 1–2) — per-tile AND per-action.** Each slippery tile names *one*
 > action and how it may go wrong, e.g. `DOWN → 60% down / 40% right`. That slip applies
@@ -67,7 +68,7 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 > agent's action set** for that state (`env.valid_actions`) — the agent can only *choose*
 > legal moves, so it never wastes a step bumping a wall. A "stay" in a replay is therefore
 > always a *slip*, never a wall bump. (Continuous rooms 4–5 have no discrete walls to mask;
-> there, avoiding the cars/boundary is the learning task itself.)
+> there, avoiding the canyon walls/asteroids is the learning task itself.)
 >
 > **ε decay is LINEAR:** `ε = max(ε_min, ε₀ − K·t)` where `t` = episode and **K** is a tunable
 > hyperparameter (the per-episode decrement). K = 0 keeps ε fixed.
@@ -76,19 +77,20 @@ The three main tabs are: **Room Simulation (HTML)**, **Training Metrics (Charts)
 A **key-and-door puzzle**: Hezki must grab the key (which melts the ice-gate), then reach the exit.
 
 * **State space** is **augmented with the pickups already collected**:
-  `s = (x, y, mask)` where `mask` is a 4-bit set of {key, +15, +5, +20}. 1152 states.
-  The augmentation is what stops the agent farming the same bonus forever.
+  `s = (x, y, mask)` where `mask` is a bitmask over the one-off pickups on the board
+  (key `K`, bonuses `b`, `c`). The augmentation is what stops the agent farming the same
+  bonus forever.
 * **Actions** Up / Down / Left / Right.
 * **Model** *known* → Value Iteration:
   `V(s) ← maxₐ Σₛ′ P(s′|s,a)·[R + γ·V(s′)]`, repeated until `max|ΔV| < θ`.
 * **Layout (Level 1)** — text map, row 0 = top (`.` blank, `#` wall, `~` slippery,
-  `S` start, `E` exit, `D` door, `K` key, `a/b/c` bonuses, `x` hazard):
+  `S` start, `E` exit, `D` door, `K` key, `b/c` bonuses, `x` hazard):
 
 ```
 . . . ~ ~ . . . . S        row 4 is wall except column 1 — the ONLY passage
 . # # . . # # # # .        between the top and bottom halves.
 . # # . . # K # # .        The key is walled in on 3 sides: reachable only by
-~ . . . . a ~ . . .        slipping UP from the tile below it (60% success).
+~ . . . . . ~ . . .        slipping UP from the tile below it (60% success).
 . # # # # # # # # #        The gate is likewise reachable only by slipping
 . . . . . ~ . . ~ ~        LEFT from its neighbour (60% success).
 . ~ ~ # # b # # ~ c
@@ -98,30 +100,65 @@ E # . . . . . . x .
 ```
 
 * **Rewards** step **`0`** (a gentle first room — discounting still favours a short route),
-  key `+50`, bonuses `+15 / +5 / +20` (one-off), hazard `−50` (repeatable, non-terminal),
-  exit `+100` (terminal). The **door acts as a wall until the key is held**, then vanishes.
+  key `+50`, bonuses `+5` (`b`) / `+20` (`c`) (one-off), hazard `x` `−50` (repeatable,
+  non-terminal), exit `+100` (terminal). The **door acts as a wall until the key is held**,
+  then vanishes.
 * **Slip model (per-tile AND per-action)** — a tile names one action, e.g.
   `DOWN → 60% down / 40% right`. That slip applies **only** when the agent chooses that
   action; every other action on the same tile is deterministic (100%).
 * **Chart** max `|ΔV|` per sweep (convergence) + a heat-map of `V(s)` (sliced at `mask=0`).
-* **Good hyperparameters** `γ = 0.99`, `θ = 1e-4` → converges in **~63 sweeps**;
-  the optimal plan scores **190** (50+15+5+20+100) in ~50 steps, **30/30 successful runs**.
+* **Hyperparameters (sidebar defaults)** `γ = 0.99`, `θ = 1e-4` → converges in **54 sweeps**,
+  `V(start) ≈ 126.2`; the greedy policy reaches the exit in **30/30** held-out seeded runs,
+  averaging **~50 steps** and **175** total reward.
 
-### Room 2 · The Dark Temple — SARSA
+### Room 2 · The Cloning Lab — SARSA (Sokoban box-push)
+A **Matrix-cloning-lab puzzle**: push both boxes onto their pressure plates to open the
+ice-gate, then reach the exit.
+
+* **State** `s = (agent_x, agent_y, box_positions, bonus_mask, paid_plates)` — the environment
+  tracks the full configuration so nothing can be farmed twice; the agent's **observation**
+  drops to `(agent_x, agent_y, box_positions)` since the gate/plate status is derivable from
+  where the boxes sit. Update uses the **on-policy** bootstrap
+  `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]`.
+* **Actions** Up / Down / Left / Right. Moving into a box **pushes** it one cell if the cell
+  beyond is free (not a wall/border/door/another box); the agent then stays put. A box already
+  on a plate is locked and can't be pushed again.
+* **Layout (Level 2)** — row 0 = top (`X` = box start, `B` = pressure plate, `G` = bonus,
+  `N` = repeatable penalty tile, `R` = dead-lock reset tile):
+
+```
+E D . . N N ~ . . .      The door (top-left) is a wall until BOTH plates hold a box;
+# N N ~ . . . N N .      then it opens and the exit becomes reachable through it.
+. . . . . # # # # .      Stepping on the reset tile snaps the agent AND both boxes
+~ ~ ~ . . # B . . .      back to their start positions (a way out of a dead-lock) —
+# ~ # . . # . X . #      it does NOT undo already-paid plates or collected bonuses.
+G G G # . # . . . #
+G G G # . # # . . #
+G G # . . . . . . #
+# # . . # # # # # #
+S . . . . . . X . B
+```
+
+* **Rewards** step `−1`, bonus tile `G` `+1000` (one-off), penalty tile `N` `−100`
+  (repeatable, every visit), pressure plate `B` `+5000` (once, the first time a box lands on
+  it), exit `+10000` (terminal).
+* **Slip model** per-tile *and* per-action, exactly as in Room 1 — but note slip resamples the
+  agent's actual movement *direction*, so a slip can also change which cell a push lands in.
+* **Charts** reward per episode + ε-decay.
+* **Hyperparameters (sidebar defaults)** `α = 0.10`, `γ = 0.99`, `ε₀ = 1.0`, `ε-decay K = 0.0003`,
+  `ε_min = 0.01`, `optimistic init Q₀ = 0`, `episodes = 6000`, `max_steps = 500` →
+  **20/20** held-out seeded runs solved, averaging **45 steps** and **≈19,855** total reward.
+
+### Room 3 · The Dark Temple — Q-Learning (idol-and-boulder chase)
 A **Raiders-style idol run**: take the golden idol (key) to open the stone gate, then reach the
 exit — without doubling back once the boulder is awake.
 
 * **State — a deliberate abstraction.** The *environment* tracks the full one-off pickup
-  bitmask (idol + treasures), so nothing can be farmed twice. The *agent* observes only
-  `s = (x, y, holding-the-idol?, boulder-offset)` (offset clipped to ±3).
-  Model *unknown* — learned by interaction:
-  `Q(s,a) ← Q(s,a) + α·[r + γ·Q(s′,a′) − Q(s,a)]` (**on-policy**).
-* **Why abstract the state?** Exposing all `2¹⁰` pickup combinations to the agent left almost
-  every state barely visited, so the greedy policy contained **cycles**: 22 % of runs dead-looped
-  until the step cap (**78 % escape**, 118 steps). Dropping the pickup bits halves the table and
-  gives **100 % escape in ~40 steps** — a textbook demonstration of the curse of dimensionality
-  and of choosing the right state representation.
-* **Layout (Level 2)** — row 0 = top (`h`/`H` = pit −50/−100, `B` = pressure plate,
+  bitmask (idol + treasures) plus the boulder's absolute position, so nothing can be farmed
+  twice. The *agent* observes only `s = (x, y, holding-the-idol?, boulder-offset)` (offset
+  clipped to ±3). Update uses the **off-policy, greedy-bootstrap** rule
+  `Q(s,a) ← Q(s,a) + α·[r + γ·maxₐ′Q(s′,a′) − Q(s,a)]`.
+* **Layout (Level 3)** — row 0 = top (`h`/`H` = pit `−50`/`−100`, `B` = pressure plate,
   `K` = idol, `G` = treasure):
 
 ```
@@ -137,47 +174,49 @@ h . # . # . # # # .
 S # E D . . . . # .
 ```
 
-* **Rewards** step **`0`**, idol `+1000`, treasure `+100` (one-off), pit `−50 / −100`
-  **and hurled back to the start** (episode continues), boulder catch `−1500` + back to start
-  + **the temple resets to its default layout**, exit `+2000` (terminal).
+* **Rewards** step `0`, idol `+1000`, treasure `+100` (one-off), pit `−50`/`−100` **and hurled
+  back to the start** (episode continues), pressure plate `+1000` (once — appears only once
+  the idol is held, then wakes the **boulder**, which retraces the agent's own trail a few
+  steps behind), boulder catch `−1000` **+ back to the start, but everything already collected
+  is kept** (no full reset), exit `+2000` (terminal). The plate is a pure trap: the exit is
+  already reachable once the idol alone is held.
 * **Slip model** per-tile *and* per-action, exactly as in Room 1.
-* **Why optimistic initialisation matters here** — the left corridor is a zig-zag guarded by
-  pits, so a plain ε-greedy random walk reached the idol **0 times in 120 000 steps** and SARSA
-  learned nothing (0 % escape). With **optimistic init** (`Q₀ = 500`) exploration becomes
-  *systematic* and the room is solved in ~7 s.
-* **Charts** ε-decay and cumulative reward per episode.
-* **Good hyperparameters** `α = 0.1`, `γ = 0.99`, `ε = 0.10`, `ε-decay = 1.0`, **`Q₀ = 500`**,
-  `episodes = 3000`, `max_steps = 400` → **100 % escape**, ~40-51 steps,
-  best recorded episode **3000** (idol + exit, no pit penalties).
+* **Charts** reward per episode + ε-decay.
+* **Hyperparameters (sidebar defaults)** `α = 0.1`, `γ = 0.696`, `ε₀ = 1.0`, `ε-decay K = 0.0002`,
+  `ε_min = 0.01`, `optimistic init Q₀ = 0`, `episodes = 6000`, `max_steps = 400` →
+  **20/20** held-out seeded runs solved, averaging **~106 steps** and **≈4,970** total reward.
+  A lower γ than the other rooms trades a slower path for a **higher absolute reward**: it makes
+  the deeply-discounted, far-off exit relatively less attractive next to the many nearby
+  treasure tiles, so the learned policy detours to collect more of them rather than beelining
+  for the exit as it does at `γ = 0.99`.
 
-### Room 3 · The Cloning Lab — Q-Learning (Cliff Walking)
-* **State / actions** grid; start `(0,0)`, exit `(9,0)`; deterministic movement. Update uses the
-  **greedy** bootstrap `Q(s,a) ← Q(s,a) + α·[r + γ·maxₐ′Q(s′,a′) − Q(s,a)]` (**off-policy**).
-* **Layout (Level 3 — hard)** the bottom row `y=0`, `x = 1..8`, is the *cliff of clones*;
-  two "firewall" pillars `(3,2),(6,2)` force the safe route up and over, sharpening the
-  risk/reward of hugging the cliff.
-* **Rewards** step `−1`, cliff `−100` **and reset to start** (episode continues — canonical Cliff
-  Walking), exit `+100` (terminal).
-* **Charts** reward per episode + a plot of the greedy path (the **aggressive cliff-hugging route**
-  along `y=1`).
-* **Good hyperparameters** `α = 0.1`, `γ = 0.99`, `ε₀ = 1.0`, `ε-decay = 0.995`,
-  `episodes = 1000`, `max_steps = 400` → an **11-step** cliff-hugging solution.
+### Room 4 · Tokyo Drift Canyon — Function Approximation
+A **time-trial**: drive a winding canyon touge road from start to finish as fast as possible,
+without clipping the canyon walls.
 
-### Room 4 · The Hovercar Garage — Function Approximation
-* **State** continuous `[X, Y, Vₓ, V_y]`, arena `0 ≤ X,Y ≤ 10 m`. Start `(1,1)`, exit region
-  `X > 8.5 ∧ Y > 8.5`.
-* **Actions** 9 discrete accelerations `(aₓ, a_y) ∈ {−1,0,1}²`.
-* **Physics** (`dt = 0.02 s`): `V ← clip(V + a, ±v_max)`, then `X ← X + Vₓ·dt`, `Y ← Y + V_y·dt`.
-* **Obstacles** two parked cars `(X 3–4, Y 0–6)` and `(X 6–7, Y 4–10)` — these force a
-  *serpentine*: you can only cross `X∈[3,4]` above `Y=6` and only cross `X∈[6,7]` below `Y=4`.
-* **Learner** **tile coding** (8 tilings × 8 bins over the 4-D box) feeding a linear
+* **State** continuous `[X, Y, Vₓ, V_y]`, arena `0 ≤ X,Y ≤ 10 m`. The road itself is defined by
+  a 10×10 occupancy grid (`#` wall, `.` drivable) but the car moves **continuously and
+  diagonally** across it — the grid only shapes the track, rendered without grid lines so it
+  reads as a smooth canyon road.
+* **Actions** 9 discrete **velocities** `(Vₓ, V_y) ∈ {−1,0,1}²` — each action *sets* the
+  velocity directly (no momentum/inertia: choosing a velocity this step fully replaces
+  whatever velocity the car had). `dt = 0.02 s` per step, so the car moves `V·dt` metres.
+* **Collision** the car has a small hitbox (half-size `0.25 m`, sized to fit the ~1 m-wide
+  lanes); a move whose hitbox would touch a wall is blocked — the car **stops** (`Vₓ=V_y=0`)
+  and the position doesn't change — and costs `COLLISION_PENALTY` that step. This is a mild
+  per-step nudge, not a terminal crash, so the agent can recover and keep driving.
+* **Learner** **tile coding** (configurable tilings/bins over the 4-D box) feeding a linear
   `Q(s,a) = wₐ·φ(s)`, trained by **semi-gradient Q-learning**. This is genuine function
   approximation — the table is replaced by weight vectors over overlapping tilings.
-* **Rewards** step `−0.1`, crash `−100` (terminal), exit `+100` (terminal).
+* **Rewards** wall touch `−10`/step (not terminal), finish `+1000 / total_time` (terminal —
+  `total_time = steps · dt`, so a **faster lap scores higher**), plus optional **potential-based
+  reward shaping**: `shaping_coef · (γ_shaping·Φ(s′) − Φ(s))` where `Φ` is a precomputed
+  wave-front distance-to-finish over the free cells (Ng et al., 1999 — shaping this way cannot
+  change the optimal policy, it only densifies an otherwise very sparse signal).
 * **Charts** moving average of episode duration + reward progression.
-* **Good hyperparameters** `α = 0.5`, `γ = 0.99`, `ε = 0.1`, `optimistic init Q₀ = 100`,
-  `tilings = 8`, `bins = 8`, `v_max = 3`, shaping on (`coef = 5`), `episodes = 2000`
-  → **100 % greedy success**, ~347-step weave (≈ 1 min to train).
+* **Hyperparameters (sidebar defaults)** `α = 0.30`, `γ = 0.99`, `ε₀ = 0.50`, `ε-decay K = 0.0004`,
+  `ε_min = 0`, `optimistic init Q₀ = 60`, `tilings = 8`, `bins/dim = 10`, `episodes = 2500`,
+  `max_steps = 2500`, shaping on (`coef = 30`) → **64 % escape rate** on the sidebar defaults.
 
 ### Room 5 · The Asteroid Field Crossing — Deep Q-Network (DQN)
 A **Frogger-style crossing**: Hezki's escape pod must get from the middle-left start to a
@@ -222,7 +261,7 @@ middle-right goal region, dodging two lanes of vertical asteroid traffic. There 
   (spawn probability, asteroid speed), plus a **“Generate Random Room & Test Policy”** button
   that re-randomises the traffic (keeping `vision` fixed as trained) and runs the learned policy
   on a field it never trained on.
-* **Good hyperparameters** (the sidebar defaults) `LR = 0.0043`, `γ = 0.911`, `batch = 64`,
+* **Hyperparameters (sidebar defaults)** `LR = 0.0043`, `γ = 0.911`, `batch = 64`,
   `ε₀ = 0.98`, `ε-decay K = 0.0038`, `ε_min = 0.07`, `target update = 150 steps`, `hidden = 256`,
   `episodes = 1500`, `radar radius (vision) = 3.5`, `spawn prob = 0.08`, `speed = 0.15`,
   `max steps = 670` → **60.1 % escape rate** (902/1500 training episodes reached the goal) —
@@ -237,30 +276,31 @@ deliberate; each keeps the pedagogical goal intact.
 
 1. **Reward on the goal transition** *replaces* the step cost (entering the exit gives `+100`, not
    `+100 − 1`). Fewer steps ⇒ higher return, matching “faster escape = higher reward”.
-2. **Room 3 cliff.** The brief calls it both *terminal* and *“sends the agent back to start.”* We
-   implement the **canonical Cliff-Walking** rule — `−100` **and teleport to start, episode
-   continues**; only the exit is terminal. This is exactly what produces the famous
-   cliff-hugging optimal path.
-3. **Room 4 needs help to be learnable.** The exact obstacle geometry makes a sparse-reward,
-   momentum-controlled maze that random exploration almost never solves. Three standard,
-   *policy-preserving* techniques make it reliable, all toggleable in the UI:
-   * **Potential-based reward shaping** (Ng et al., 1999) using an **obstacle-aware wave-front
-     distance-to-goal** as the potential Φ, with `γ_shaping = 1` (telescoping ⇒ no “camping”
-     reward). Shaping cannot change the optimal policy; it only densifies the signal.
-   * **Optimistic initialisation** (`Q₀ = 100`) to drive systematic exploration.
-   * **Soft outer walls** — the parked *cars* are fatal `−100` crashes, but bumping the garage
-     boundary just clamps position with a small `−1` nudge (set *hard walls* to restore the strict
-     `−100`-terminal reading).
-4. **Velocity is clipped** to `±v_max` in Room 4 (the brief’s `V ← V + a` is otherwise
-   unbounded). The brief’s docx describes velocity as discrete; the MD spec describes
-   *acceleration* actions with accumulating velocity — we follow the MD (richer, momentum-based).
+2. **Room 3's pits are penalty-and-reset, not terminal.** Stepping on a pit costs `−50`/`−100`
+   and hurls the agent back to the start, but the episode continues — only the exit (and, in
+   Room 2, the exit after both plates are covered) ends an episode. This keeps a single mistake
+   from wasting the whole episode while still making pits genuinely costly to wander into.
+3. **Room 4's wall response is a mild per-step nudge, not a terminal crash.** A move whose
+   hitbox would touch a canyon wall is simply blocked (`Vₓ=V_y=0`, position unchanged) and costs
+   `−10` that step — the agent can immediately try again. A hard terminal crash penalty made the
+   car too scared to move at all early in training; the softer nudge, combined with:
+   * **Potential-based reward shaping** (Ng et al., 1999) using a **wave-front
+     distance-to-finish** as the potential Φ — shaping cannot change the optimal policy, it only
+     densifies an otherwise very sparse signal, and
+   * **Optimistic initialisation** (`Q₀ = 60`) to drive systematic exploration,
+
+   together make the room reliably learnable.
+4. **Room 4's actions set velocity directly** (`Vₓ, V_y ∈ {−1,0,1}`, no accumulation/momentum) —
+   simpler and more stable to learn with tile coding than accelerating a continuous velocity,
+   while still requiring genuine function approximation over the continuous `[X,Y,Vₓ,V_y]` state.
 5. **Room 5's sensor is a genuine circular radar.** `vision` (sidebar slider) is the radius of a
    detection circle centred on Hezki; an asteroid's `(dx, dy)` is only computed and placed in the
    state once it enters that circle (Euclidean distance ≤ `vision`), and `100.0`-padded otherwise
    — exactly the brief's "padding when fewer than K obstacles are within radar range."
 6. **Levels were redesigned as a difficulty ramp.** Rather than the brief's scattered
    coordinates, each grid is an intentional, movie-themed level whose hazards escalate
-   (Room 1: ice only → Room 2: pits + mud → Room 3: cliff of clones). Each cell shows its
+   (Room 1: ice + one hazard tile → Room 2: a Sokoban box-pushing puzzle over slip tiles and
+   penalty tiles → Room 3: an idol-and-boulder chase over reset-pits). Each cell shows its
    reward so the learned policy is interpretable, and a legend explains every tile.
 7. **Reproducible & robust evaluation.** Every environment uses a **seeded RNG**, so training
    and replay are reproducible. Because slippery rooms are stochastic, the replay reports a

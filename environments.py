@@ -9,8 +9,8 @@ Rendering (see utils.py) draws y=0 at the BOTTOM so the geometry reads naturally
 
 Terminal states are ABSORBING everywhere (the spec's critical rule): once entered
 the episode ends and no further movement / sliding is computed.  The single
-exception is Room 3's cliff, which — per the canonical Cliff-Walking task — is a
-penalty-and-reset, not a true terminal (see Room3CloningLab).
+exception is Room 3's spike pits (see Room3DarkTemple), which cost a penalty
+and reset the agent to the start but do NOT end the episode.
 """
 from __future__ import annotations
 
@@ -26,154 +26,6 @@ GRID_ACTIONS = [UP, DOWN, LEFT, RIGHT]
 ACTION_NAMES = {UP: "Up", DOWN: "Down", LEFT: "Left", RIGHT: "Right"}
 ACTION_ARROWS = {UP: "↑", DOWN: "↓", LEFT: "←", RIGHT: "→"}
 _DELTA = {UP: (0, 1), DOWN: (0, -1), LEFT: (-1, 0), RIGHT: (1, 0)}
-
-# Shared grid reward structure
-STEP_REWARD = -1.0
-GOAL_REWARD = 100.0
-TRAP_REWARD = -100.0
-
-
-def _rot_ccw(d):   # +90° (left relative to the action)
-    return (-d[1], d[0])
-
-
-def _rot_cw(d):    # -90° (right relative to the action)
-    return (d[1], -d[0])
-
-
-def _rot_180(d):   # backwards
-    return (-d[0], -d[1])
-
-
-# --------------------------------------------------------------------------- #
-# Grid base class (Rooms 1-3)
-# --------------------------------------------------------------------------- #
-class GridWorld:
-    """A 10x10 grid MDP with walls, slippery tiles and terminal traps.
-
-    Provides BOTH a model-free interface (`reset`/`step`, used by SARSA/Q-Learning
-    which must not peek at the dynamics) and, via `build_model`, the full transition
-    model P(s'|s,a) used by Value Iteration in Room 1.
-    """
-
-    NAME = "GridWorld"
-
-    def __init__(self, size=10, start=(0, 0), goal=(9, 9),
-                 walls=(), slippery=(), traps=(), seed=None):
-        self.size = size
-        self.start = start
-        self.goal = goal
-        self.walls = set(walls)
-        self.slippery = set(slippery)
-        self.traps = set(traps)
-        self.terminals = {goal} | self.traps
-        self.actions = GRID_ACTIONS
-        self.n_actions = 4
-        self.rng = np.random.default_rng(seed)     # slips are reproducible
-        self._va_cache = {}
-        self._state = start
-
-    def reseed(self, seed):
-        self.rng = np.random.default_rng(seed)
-
-    # ---- geometry -------------------------------------------------------- #
-    def in_bounds(self, c):
-        return 0 <= c[0] < self.size and 0 <= c[1] < self.size
-
-    def is_wall(self, c):
-        return c in self.walls
-
-    def is_terminal(self, c):
-        return c in self.terminals
-
-    def _apply(self, s, delta):
-        """Deterministically apply a delta; stay put if it hits a wall/boundary."""
-        nxt = (s[0] + delta[0], s[1] + delta[1])
-        if not self.in_bounds(nxt) or self.is_wall(nxt):
-            return s
-        return nxt
-
-    def valid_actions(self, s):
-        """Action masking: only actions whose intended move actually leaves the
-        current cell (i.e. NOT into a wall or off the board). If a cell were
-        fully enclosed we fall back to all actions so nothing can crash."""
-        va = self._va_cache.get(s)
-        if va is None:
-            va = [a for a in self.actions if self._apply(s, _DELTA[a]) != s]
-            va = va or list(self.actions)
-            self._va_cache[s] = va
-        return va
-
-    # ---- transition dynamics -------------------------------------------- #
-    def outcomes(self, s, a):
-        """List of (prob, s') for taking action `a` in state `s`.
-
-        Slippery tile: 0.70 intended / 0.10 left / 0.10 right / 0.10 backwards.
-        Any outcome blocked by a wall/boundary collapses onto `s` (stay).
-        """
-        delta = _DELTA[a]
-        if s in self.slippery:
-            candidates = [(delta, 0.70), (_rot_ccw(delta), 0.10),
-                          (_rot_cw(delta), 0.10), (_rot_180(delta), 0.10)]
-        else:
-            candidates = [(delta, 1.0)]
-        dist = {}
-        for d, p in candidates:
-            s2 = self._apply(s, d)
-            dist[s2] = dist.get(s2, 0.0) + p
-        return [(p, s2) for s2, p in dist.items()]
-
-    def reward_done(self, s2):
-        if s2 == self.goal:
-            return GOAL_REWARD, True
-        if s2 in self.traps:
-            return TRAP_REWARD, True
-        return STEP_REWARD, False
-
-    # ---- model-free interface (SARSA / Q-Learning) ---------------------- #
-    def reset(self):
-        self._state = self.start
-        return self._state
-
-    def step(self, a):
-        outs = self.outcomes(self._state, a)
-        probs = [p for p, _ in outs]
-        s2 = outs[int(self.rng.choice(len(outs), p=probs))][1]
-        r, done = self.reward_done(s2)
-        self._state = s2
-        return s2, r, done
-
-    # ---- helpers --------------------------------------------------------- #
-    def states(self):
-        return [(x, y) for x in range(self.size) for y in range(self.size)
-                if (x, y) not in self.walls]
-
-    def build_model(self):
-        """Full model P[s][a] -> list of (prob, s', reward, done). For DP."""
-        P = {}
-        for s in self.states():
-            if self.is_terminal(s):
-                continue
-            P[s] = {a: [(p, s2, *self.reward_done(s2)) for p, s2 in self.outcomes(s, a)]
-                    for a in self.actions}
-        return P
-
-    def is_success(self):
-        return self._state == self.goal
-
-    def encode(self, s):
-        """Grid states are already discrete/hashable — identity encoding."""
-        return s
-
-    def render_frame(self):
-        return {"agent": self._state}
-
-    def render_meta(self):
-        """Static layout used by the HTML renderer."""
-        return dict(size=self.size, start=self.start, goal=self.goal,
-                    walls=self.walls, slippery=self.slippery, traps=self.traps,
-                    cliff=set())
-
 
 # --------------------------------------------------------------------------- #
 # Room 1 — The Frozen Archive (Ice Age) — Dynamic Programming
@@ -388,9 +240,9 @@ class Room1FrozenArchive:
 
 
 # --------------------------------------------------------------------------- #
-# Room 2 — The Dark Temple (Indiana Jones) — SARSA
+# Room 3 — The Dark Temple (Indiana Jones) — Q-Learning
 # --------------------------------------------------------------------------- #
-class Room2DarkTemple:
+class Room3DarkTemple:
     """LEVEL 2 — Raiders temple: golden idol (key) → stone door → exit.
 
     Mechanics
@@ -409,7 +261,7 @@ class Room2DarkTemple:
     State = (x, y, collected-mask, chaser-position or None).
     """
 
-    NAME = "Room 3 · The Dark Temple"     # (this env is used at grid position 'room3')
+    NAME = "Room 3 · The Dark Temple"
     MOVIE = "Raiders of the Lost Ark (1981)"
     ALGO = "Q-Learning (off-policy TD control)"
     SIZE = 10
@@ -469,7 +321,7 @@ class Room2DarkTemple:
             self.slippery[(cx, self.SIZE - 1 - cr)] = rules
         if ice_tiles != set(self.slippery):
             raise ValueError(
-                "Room 2 layout/SLIP mismatch — "
+                "Room 3 layout/SLIP mismatch — "
                 f"in LAYOUT only: {sorted(ice_tiles - set(self.slippery))}; "
                 f"in SLIP only: {sorted(set(self.slippery) - ice_tiles)}")
 
@@ -613,38 +465,6 @@ class Room2DarkTemple:
                     button_bit=self.button_bit, button_reward=self.BUTTON_REWARD,
                     catch_reward=self.CATCH_REWARD,
                     exit_reward=self.EXIT_REWARD, traps=set(), cliff=set())
-
-
-# --------------------------------------------------------------------------- #
-# Room 3 — The Cloning Lab (The Matrix) — Q-Learning (Cliff Walking)
-# --------------------------------------------------------------------------- #
-class Room3CloningLab(GridWorld):
-    NAME = "Room 2 · The Cloning Lab"     # (this env is used at grid position 'room2')
-    MOVIE = "The Matrix (1999)"
-    ALGO = "SARSA (on-policy TD control)"
-
-    def __init__(self, seed=None):
-        # "Firewall" pillars force the safe route up and over, sharpening the
-        # risk/reward of hugging the cliff of clones along the bottom.
-        super().__init__(size=10, start=(0, 0), goal=(9, 0), seed=seed,
-                         walls=[(3, 2), (6, 2)], slippery=[], traps=[])
-        # Cliff = bottom row between start and goal.  Canonical Cliff-Walking:
-        # stepping on it costs -100 and RESETS to start (episode continues).
-        self.cliff = {(x, 0) for x in range(1, 9)}           # x = 1..8
-
-    def step(self, a):
-        s2 = self._apply(self._state, _DELTA[a])             # deterministic
-        if s2 in self.cliff:
-            self._state = self.start
-            return self.start, TRAP_REWARD, False            # penalty + reset
-        r, done = self.reward_done(s2)
-        self._state = s2
-        return s2, r, done
-
-    def render_meta(self):
-        m = super().render_meta()
-        m["cliff"] = self.cliff
-        return m
 
 
 # --------------------------------------------------------------------------- #
@@ -1282,15 +1102,3 @@ class Room5AsteroidField:
                     lane_bonus=self.LANE_BONUS, idle_penalty=self.IDLE_PENALTY,
                     wall_penalty=self.WALL_PENALTY, wall_margin=self.WALL_MARGIN,
                     vision=self.vision)
-
-
-# --------------------------------------------------------------------------- #
-# Registry — drives the sidebar's difficulty progression
-# --------------------------------------------------------------------------- #
-ROOM_REGISTRY = [
-    dict(key="room1", cls=Room1FrozenArchive, stars=1, emoji="❄️"),
-    dict(key="room2", cls=Room2DarkTemple,    stars=2, emoji="🏛️"),
-    dict(key="room3", cls=Room3CloningLab,    stars=3, emoji="🕶️"),
-    dict(key="room4", cls=Room4Garage,        stars=4, emoji="🏎️"),
-    dict(key="room5", cls=Room5AsteroidField, stars=5, emoji="🚀"),
-]
