@@ -455,6 +455,23 @@ class DQNAgent:
         import copy
         return DQNPolicy(copy.deepcopy(self.q).eval(), self.low, self.span)
 
+    def _eval_score(self, policy, eval_env, n=10):
+        """Greedy success rate over `n` fixed-seed rollouts on a SEPARATE, deep-copied
+        env — so evaluating a snapshot never perturbs self.env's own RNG stream mid-
+        training. Used to pick the best-performing snapshot as the final policy,
+        since DQN training is not monotonically improving (a mid-training snapshot
+        can easily out-perform whatever the network looks like at the very end)."""
+        wins = 0
+        for i in range(n):
+            eval_env.rng = np.random.default_rng(20260101 + i)   # fixed & reproducible
+            s = eval_env.reset()
+            done, steps = False, 0
+            while not done and steps < self.max_steps:
+                s, r, done = eval_env.step(policy.action(s))
+                steps += 1
+            wins += int(eval_env.is_success())
+        return wins / n
+
     def _learn(self, huber):
         import torch
         idx = self.rng.integers(0, len(self._buf), size=self.batch)
@@ -471,12 +488,14 @@ class DQNAgent:
         self.opt.zero_grad(); loss.backward(); self.opt.step()
 
     def train(self, snapshots=6, progress=None, record=25):
-        import torch
+        import torch, copy
         rewards, lengths, snaps, tapes, eps_hist, succ = [], [], [], [], [], []
         milestones = _milestones(self.episodes, snapshots)
         rec_at = _record_points(self.episodes, record)
         huber = torch.nn.SmoothL1Loss()
         eps, gstep = self.eps0, 0
+        eval_env = copy.deepcopy(self.env)          # isolated from self.env's RNG stream
+        best_policy, best_score = None, -1.0
         for ep in range(self.episodes):
             s = self._norm(self.env.reset())
             taping = ep in rec_at
@@ -507,13 +526,21 @@ class DQNAgent:
                                   success=self.env.is_success(), frames=frames,
                                   actions=acts, step_rewards=rews))
             if ep in milestones:
-                snaps.append((ep, self._policy()))
+                snap_policy = self._policy()
+                snaps.append((ep, snap_policy))
+                score = self._eval_score(snap_policy, eval_env)
+                if score > best_score:
+                    best_score, best_policy = score, snap_policy
             if progress:
                 progress(ep + 1, self.episodes)
         final = self._policy()
         snaps.append((self.episodes, final))
+        final_score = self._eval_score(final, eval_env)
+        if final_score > best_score:
+            best_score, best_policy = final_score, final
         return dict(rewards=rewards, lengths=lengths, epsilons=eps_hist,
-                    snapshots=snaps, final_policy=final, tapes=tapes, successes=succ)
+                    snapshots=snaps, final_policy=best_policy, tapes=tapes, successes=succ,
+                    best_score=best_score)
 
 
 # --------------------------------------------------------------------------- #
