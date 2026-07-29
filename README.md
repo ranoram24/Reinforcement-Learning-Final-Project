@@ -1,4 +1,5 @@
 # 🐕 Hezki the Dog vs. the Men in Black — a Reinforcement-Learning Escape Room
+## Presenters: Ran Uram, Shahar Lankry, Daniel Geron
 
 A Streamlit escape-room game built for the **Reinforcement-Learning final project**
 (תשפ"ו). Hezki the dog is on the run from **Agent J**, who wants to *neuralyze* (erase) his
