@@ -4,9 +4,9 @@ Streamlit entry point.  Hezki (a dog) escapes Agent J through five Hollywood
 movie sets of increasing difficulty, each solved by a different RL algorithm:
 
     Room 1  Frozen Archive  (Ice Age)          Value Iteration / DP
-    Room 2  Dark Temple      (Indiana Jones)    SARSA
-    Room 3  Cloning Lab      (The Matrix)       Q-Learning (Cliff Walking)
-    Room 4  Hovercar Garage  (Fast & Furious)   Tile-coding Function Approximation
+    Room 2  Cloning Lab      (The Matrix)       SARSA
+    Room 3  Dark Temple      (Indiana Jones)    Q-Learning (idol-and-boulder chase)
+    Room 4  Tokyo Drift Canyon (Fast & Furious) Tile-coding Function Approximation
     Room 5  Asteroid Field   (Star Wars)        Deep Q-Network (DQN)
 
 Run:  streamlit run app.py

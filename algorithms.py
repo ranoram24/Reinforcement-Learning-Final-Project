@@ -2,10 +2,11 @@
 
     * ValueIteration  — Dynamic Programming with a KNOWN model (Room 1).
     * Sarsa           — on-policy TD control (Room 2).
-    * QLearning       — off-policy TD control (Rooms 3 & 5; Room 5 discretises a
-                        partial observation via env.encode).
+    * QLearning       — off-policy TD control (Room 3).
     * LinearFAAgent   — semi-gradient Q-Learning over TILE-CODED features, i.e.
                         genuine function approximation for the continuous Room 4.
+    * DQNAgent        — Deep Q-Network (neural-net function approximation) for
+                        the continuous, dynamic-obstacle Room 5.
 
 Every learner produces a lightweight *policy object* (``.action(raw_state) -> a``)
 and periodic snapshots of it, so the app can replay "what the agent knew at each
@@ -386,7 +387,7 @@ class LinearFAAgent:
 
 
 # --------------------------------------------------------------------------- #
-# Deep Q-Network (DQN) — neural-net function approximation (Room 4 option)
+# Deep Q-Network (DQN) — neural-net function approximation (Room 5)
 # torch is imported lazily so the other rooms never depend on it.
 # --------------------------------------------------------------------------- #
 def _build_qnet(in_dim, n_actions, hidden):

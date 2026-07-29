@@ -5,7 +5,7 @@ Coordinate convention (grid rooms)
 state = (x, y),  x = column (0..size-1),  y = row (0..size-1).
 Movement:  RIGHT = x+1,  LEFT = x-1,  UP = y+1,  DOWN = y-1.
 Rendering (see utils.py) draws y=0 at the BOTTOM so the geometry reads naturally
-(this matters for Cliff Walking: start bottom-left, goal bottom-right).
+(e.g. Room 3's start is bottom-left, its exit just a few cells away).
 
 Terminal states are ABSORBING everywhere (the spec's critical rule): once entered
 the episode ends and no further movement / sliding is computed.  The single
@@ -243,7 +243,7 @@ class Room1FrozenArchive:
 # Room 3 — The Dark Temple (Indiana Jones) — Q-Learning
 # --------------------------------------------------------------------------- #
 class Room3DarkTemple:
-    """LEVEL 2 — Raiders temple: golden idol (key) → stone door → exit.
+    """LEVEL 3 — Raiders temple: golden idol (key) → stone door → exit.
 
     Mechanics
     ---------
@@ -254,8 +254,8 @@ class Room3DarkTemple:
     * A **pressure plate** appears once the idol is held.  Standing on it wakes
       the **boulder**, which then *retraces the agent's own trail* a few steps
       behind — so it only catches you if you double back.  Being caught costs
-      −1500, throws you to the start and RESETS the temple to its default layout
-      (idol and treasure respawn, door returns, boulder gone).
+      −1000, but you stay exactly where you are and keep everything already
+      collected — the boulder simply vanishes; just head for the exit.
     * The plate is a pure trap: the exit is already opened by the idol alone.
 
     State = (x, y, collected-mask, chaser-position or None).
@@ -484,8 +484,8 @@ class Room2CloningLab:
 
     Mechanics
     ---------
-    * step −1; each plate pays +500000 the FIRST time a box lands on it; the
-      exit pays +1000000 (terminal). One-off bonus tiles pay +100000 each.
+    * step −1; each plate pays +5000 the FIRST time a box lands on it; the
+      exit pays +10000 (terminal). One-off bonus tiles pay +1000 each.
     * **Pushing**: moving into a box slides it one cell IF the cell beyond is
       free (no wall/border/box); the agent then STAYS put. A box already on a
       plate is locked and cannot be pushed.
@@ -691,7 +691,7 @@ class Room2CloningLab:
 
 
 # --------------------------------------------------------------------------- #
-# Room 4 — The Hovercar Garage (Fast & Furious) — Function Approximation
+# Room 4 — Tokyo Drift Canyon (Fast & Furious) — Function Approximation
 # --------------------------------------------------------------------------- #
 # 9 discrete VELOCITY actions (vx, vy) in {-1,0,1}^2 — the car sets its velocity.
 VEL_ACTIONS = [(vx, vy) for vx in (-1, 0, 1) for vy in (-1, 0, 1)]
@@ -720,8 +720,10 @@ class Room4Garage:
     MOVIE = "The Fast and the Furious: Tokyo Drift (2006)"
     ALGO = "Semi-gradient Q-Learning + tile-coding (Function Approximation)"
     DT = 0.02
-    COLLISION_PENALTY = -10.0        # mild nudge (walls already block movement) — a huge
-    FINISH_BONUS = 1000.0            # penalty just made the car too scared to move / diverge
+    # mild nudge, not a big terminal penalty (walls already block movement) — a huge
+    # penalty just made the car too scared to move / diverge:
+    COLLISION_PENALTY = -10.0
+    FINISH_BONUS = 1000.0
     HITBOX = 0.25                 # car half-size (metres) — fits the 1 m lanes
 
     # 10×10 occupancy grid (each cell = 1×1 m).  '#' wall · '.' road ·
